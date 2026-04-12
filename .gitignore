@@ -14,3 +14,4 @@ mkfs.ftrfs
 # Editor
 *~
 .#*
+*.o.d
