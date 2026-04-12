@@ -215,6 +215,7 @@ static struct file_system_type ftrfs_fs_type = {
 static void ftrfs_inode_init_once(void *obj)
 {
 	struct ftrfs_inode_info *fi = obj;
+
 	inode_init_once(&fi->vfs_inode);
 }
 
