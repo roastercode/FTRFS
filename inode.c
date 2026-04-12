@@ -23,18 +23,18 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 	struct ftrfs_sb_info    *sbi = FTRFS_SB(sb);
 	struct ftrfs_inode_info *fi;
 	struct ftrfs_inode      *raw;
-	struct buffer_head      *bh;
 	struct inode            *inode;
 	unsigned long            inodes_per_block;
 	unsigned long            block, offset;
 	__u32                    crc;
+	struct buffer_head      *bh;
 
 	inode = iget_locked(sb, ino);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
 	/* Already in cache */
-	if (!(inode->i_state & I_NEW))
+	if (!(inode_state_read_once(inode) & I_NEW))
 		return inode;
 
 	inodes_per_block = FTRFS_BLOCK_SIZE / sizeof(struct ftrfs_inode);
@@ -48,14 +48,12 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 		iget_failed(inode);
 		return ERR_PTR(-EIO);
 	}
-
 	raw = (struct ftrfs_inode *)bh->b_data + offset;
 
 	/* Verify inode CRC32 */
 	crc = ftrfs_crc32(raw, offsetof(struct ftrfs_inode, i_crc32));
 	if (crc != le32_to_cpu(raw->i_crc32)) {
 		pr_err("ftrfs: inode %lu CRC32 mismatch\n", ino);
-		brelse(bh);
 		iget_failed(inode);
 		return ERR_PTR(-EIO);
 	}
@@ -98,7 +96,6 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 		init_special_inode(inode, inode->i_mode, 0);
 	}
 
-	brelse(bh);
 	unlock_new_inode(inode);
 	return inode;
 }

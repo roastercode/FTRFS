@@ -60,6 +60,7 @@ static int ftrfs_write_inode_raw(struct inode *inode)
 
 	mark_buffer_dirty(bh);
 	brelse(bh);
+
 	return 0;
 }
 
@@ -298,7 +299,7 @@ static struct dentry *ftrfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	inode = ftrfs_new_inode(dir, mode | S_IFDIR);
 	if (IS_ERR(inode)) {
 		inode_dec_link_count(dir);
-		return inode;
+		return ERR_CAST(inode);
 	}
 
 	/* Add . and .. entries */

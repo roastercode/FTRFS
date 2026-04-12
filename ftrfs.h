@@ -146,6 +146,8 @@ __u32 ftrfs_crc32(const void *buf, size_t len);
 int ftrfs_rs_encode(uint8_t *data, uint8_t *parity);
 int ftrfs_rs_decode(uint8_t *data, uint8_t *parity);
 
+/* block.c */
+
 #endif /* _FTRFS_H */
 
 /*
@@ -157,3 +159,10 @@ void ftrfs_destroy_bitmap(struct super_block *sb);
 u64  ftrfs_alloc_block(struct super_block *sb);
 void ftrfs_free_block(struct super_block *sb, u64 block);
 u64  ftrfs_alloc_inode_num(struct super_block *sb);
+
+/* dir.c */
+struct dentry *ftrfs_lookup(struct inode *dir, struct dentry *dentry,
+                            unsigned int flags);
+
+/* namei.c */
+int ftrfs_write_inode(struct inode *inode, struct writeback_control *wbc);
