@@ -1,0 +1,16 @@
+# Build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.cmd
+*.symvers
+*.order
+.tmp_versions/
+Module.symvers
+modules.order
+mkfs.ftrfs
+*.ftrfs
+# Editor
+*~
+.#*
