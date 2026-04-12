@@ -10,7 +10,8 @@ ftrfs-y := super.o \
             inode.o \
             dir.o   \
             file.o  \
-            edac.o
+            edac.o  \
+            alloc.o
 
 ftrfs-$(CONFIG_FTRFS_FS_XATTR) += xattr.o
 

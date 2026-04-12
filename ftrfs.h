@@ -143,6 +143,8 @@ extern const struct inode_operations ftrfs_file_inode_operations;
 
 /* edac.c */
 __u32 ftrfs_crc32(const void *buf, size_t len);
+int ftrfs_rs_encode(uint8_t *data, uint8_t *parity);
+int ftrfs_rs_decode(uint8_t *data, uint8_t *parity);
 
 #endif /* _FTRFS_H */
 

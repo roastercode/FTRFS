@@ -34,7 +34,7 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 		return ERR_PTR(-ENOMEM);
 
 	/* Already in cache */
-	if (!(inode_state_read_once(inode) & I_NEW))
+	if (!(inode->i_state & I_NEW))
 		return inode;
 
 	inodes_per_block = FTRFS_BLOCK_SIZE / sizeof(struct ftrfs_inode);
