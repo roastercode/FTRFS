@@ -72,6 +72,7 @@ static void ftrfs_put_super(struct super_block *sb)
 	struct ftrfs_sb_info *sbi = FTRFS_SB(sb);
 
 	if (sbi) {
+		ftrfs_destroy_bitmap(sb);
 		brelse(sbi->s_sbh);
 		kfree(sbi->s_ftrfs_sb);
 		kfree(sbi);
@@ -165,6 +166,8 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		ret = -ENOMEM;
 		goto out_free_fsb;
 	}
+
+	if (ftrfs_setup_bitmap(sb)) { ret = -ENOMEM; goto out_free_fsb; }
 
 	pr_info("ftrfs: mounted (blocks=%llu free=%lu inodes=%llu)\n",
 		le64_to_cpu(fsb->s_block_count),

@@ -93,6 +93,10 @@ struct ftrfs_dir_entry {
  * In-memory superblock info (stored in sb->s_fs_info)
  */
 struct ftrfs_sb_info {
+	/* Block allocator */
+	unsigned long    *s_block_bitmap;  /* In-memory free block bitmap */
+	unsigned long     s_nblocks;       /* Number of data blocks */
+	unsigned long     s_data_start;    /* First data block number */
 	struct ftrfs_super_block *s_ftrfs_sb; /* On-disk superblock copy */
 	struct buffer_head       *s_sbh;      /* Buffer head for superblock */
 	spinlock_t                s_lock;     /* Superblock lock */
@@ -141,3 +145,13 @@ extern const struct inode_operations ftrfs_file_inode_operations;
 __u32 ftrfs_crc32(const void *buf, size_t len);
 
 #endif /* _FTRFS_H */
+
+/*
+ */
+
+/* alloc.c */
+int  ftrfs_setup_bitmap(struct super_block *sb);
+void ftrfs_destroy_bitmap(struct super_block *sb);
+u64  ftrfs_alloc_block(struct super_block *sb);
+void ftrfs_free_block(struct super_block *sb, u64 block);
+u64  ftrfs_alloc_inode_num(struct super_block *sb);
