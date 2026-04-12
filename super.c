@@ -84,6 +84,7 @@ static const struct super_operations ftrfs_super_ops = {
 	.alloc_inode    = ftrfs_alloc_inode,
 	.free_inode     = ftrfs_free_inode,
 	.put_super      = ftrfs_put_super,
+		.write_inode    = ftrfs_write_inode,
 	.statfs         = ftrfs_statfs,
 };
 

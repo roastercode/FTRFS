@@ -15,3 +15,7 @@ mkfs.ftrfs
 *~
 .#*
 *.o.d
+block.c
+*.cmd
+Module.symvers
+modules.order
