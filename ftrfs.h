@@ -10,6 +10,7 @@
 #define _FTRFS_H
 
 #include <linux/fs.h>
+#include <linux/fs_context.h>
 #include <linux/types.h>
 
 /* Magic number: 'FTRF' */
@@ -122,7 +123,7 @@ static inline struct ftrfs_sb_info *FTRFS_SB(struct super_block *sb)
 
 /* Function prototypes */
 /* super.c */
-int ftrfs_fill_super(struct super_block *sb, void *data, int silent);
+int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc);
 
 /* inode.c */
 struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino);

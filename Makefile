@@ -12,25 +12,28 @@ ftrfs-y := super.o \
             file.o  \
             edac.o
 
-# Kernel source tree — override with: make KERNELDIR=/path/to/kernel
-KERNELDIR ?= /lib/modules/$(shell uname -r)/build
-PWD       := $(shell pwd)
+# Kernel source tree
+# Priority: KERNEL_SRC (Yocto) > KERNELDIR (manual) > running kernel
+ifneq ($(KERNEL_SRC),)
+  KERNELDIR := $(KERNEL_SRC)
+else
+  KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+endif
+
+# Build output dir: O= provided by Yocto (kernel-build-artifacts)
+ifneq ($(O),)
+  KBUILD_OUTPUT := O=$(O)
+else
+  KBUILD_OUTPUT :=
+endif
+
+PWD := $(shell pwd)
 
 all:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	$(MAKE) -C $(KERNELDIR) $(KBUILD_OUTPUT) M=$(PWD) modules
 
 clean:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) clean
+	$(MAKE) -C $(KERNELDIR) $(KBUILD_OUTPUT) M=$(PWD) clean
 
-help:
-	@echo "Targets:"
-	@echo "  all          - build ftrfs.ko"
-	@echo "  clean        - clean build artifacts"
-	@echo ""
-	@echo "Variables:"
-	@echo "  KERNELDIR    - kernel build dir (default: running kernel)"
-	@echo ""
-	@echo "Cross-compile for arm64 (Yocto):"
-	@echo "  make KERNELDIR=<yocto-build>/tmp/work/qemuarm64-*/linux-mainline/*/build \\"
-	@echo "       ARCH=arm64 \\"
-	@echo "       CROSS_COMPILE=aarch64-poky-linux-"
+modules_install:
+	$(MAKE) -C $(KERNELDIR) $(KBUILD_OUTPUT) M=$(PWD) modules_install

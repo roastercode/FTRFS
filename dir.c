@@ -20,7 +20,6 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 	struct ftrfs_dir_entry *de;
 	unsigned long block_idx, block_no;
 	unsigned int  offset;
-	loff_t        pos = ctx->pos;
 
 	/* Emit . and .. */
 	if (!dir_emit_dots(file, ctx))

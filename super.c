@@ -8,10 +8,10 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/fs.h>
+#include <linux/fs_context.h>
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
 #include <linux/statfs.h>
-#include <linux/seq_file.h>
 #include "ftrfs.h"
 
 /* Inode cache (slab allocator) */
@@ -37,9 +37,9 @@ static struct inode *ftrfs_alloc_inode(struct super_block *sb)
 }
 
 /*
- * destroy_inode — return inode to slab cache
+ * free_inode — return inode to slab cache (kernel 5.9+ uses free_inode)
  */
-static void ftrfs_destroy_inode(struct inode *inode)
+static void ftrfs_free_inode(struct inode *inode)
 {
 	kmem_cache_free(ftrfs_inode_cachep, FTRFS_I(inode));
 }
@@ -49,7 +49,7 @@ static void ftrfs_destroy_inode(struct inode *inode)
  */
 static int ftrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
-	struct super_block   *sb = dentry->d_sb;
+	struct super_block   *sb  = dentry->d_sb;
 	struct ftrfs_sb_info *sbi = FTRFS_SB(sb);
 
 	buf->f_type    = FTRFS_MAGIC;
@@ -81,7 +81,7 @@ static void ftrfs_put_super(struct super_block *sb)
 
 static const struct super_operations ftrfs_super_ops = {
 	.alloc_inode    = ftrfs_alloc_inode,
-	.destroy_inode  = ftrfs_destroy_inode,
+	.free_inode     = ftrfs_free_inode,
 	.put_super      = ftrfs_put_super,
 	.statfs         = ftrfs_statfs,
 };
@@ -89,28 +89,25 @@ static const struct super_operations ftrfs_super_ops = {
 /*
  * ftrfs_fill_super — read superblock from disk and initialize VFS sb
  */
-int ftrfs_fill_super(struct super_block *sb, void *data, int silent)
+int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
-	struct ftrfs_sb_info    *sbi;
+	struct ftrfs_sb_info     *sbi;
 	struct ftrfs_super_block *fsb;
-	struct buffer_head      *bh;
-	struct inode            *root_inode;
-	__u32                    crc;
-	int                      ret = -EINVAL;
+	struct buffer_head       *bh;
+	struct inode             *root_inode;
+	__u32                     crc;
+	int                       ret = -EINVAL;
 
 	/* Set block size */
 	if (!sb_set_blocksize(sb, FTRFS_BLOCK_SIZE)) {
-		if (!silent)
-			pr_err("ftrfs: unable to set block size %d\n",
-			       FTRFS_BLOCK_SIZE);
+		errorf(fc, "ftrfs: unable to set block size %d", FTRFS_BLOCK_SIZE);
 		return -EINVAL;
 	}
 
 	/* Read block 0 — superblock */
 	bh = sb_bread(sb, 0);
 	if (!bh) {
-		if (!silent)
-			pr_err("ftrfs: unable to read superblock\n");
+		errorf(fc, "ftrfs: unable to read superblock");
 		return -EIO;
 	}
 
@@ -118,19 +115,16 @@ int ftrfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	/* Verify magic */
 	if (le32_to_cpu(fsb->s_magic) != FTRFS_MAGIC) {
-		if (!silent)
-			pr_err("ftrfs: bad magic 0x%08x (expected 0x%08x)\n",
-			       le32_to_cpu(fsb->s_magic), FTRFS_MAGIC);
+		errorf(fc, "ftrfs: bad magic 0x%08x (expected 0x%08x)",
+		       le32_to_cpu(fsb->s_magic), FTRFS_MAGIC);
 		goto out_brelse;
 	}
 
 	/* Verify CRC32 of superblock (excluding the crc32 field itself) */
 	crc = ftrfs_crc32(fsb, offsetof(struct ftrfs_super_block, s_crc32));
 	if (crc != le32_to_cpu(fsb->s_crc32)) {
-		if (!silent)
-			pr_err("ftrfs: superblock CRC32 mismatch "
-			       "(got 0x%08x, expected 0x%08x)\n",
-			       crc, le32_to_cpu(fsb->s_crc32));
+		errorf(fc, "ftrfs: superblock CRC32 mismatch (got 0x%08x, expected 0x%08x)",
+		       crc, le32_to_cpu(fsb->s_crc32));
 		goto out_brelse;
 	}
 
@@ -141,7 +135,7 @@ int ftrfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out_brelse;
 	}
 
-	sbi->s_ftrfs_sb   = kzalloc(sizeof(*sbi->s_ftrfs_sb), GFP_KERNEL);
+	sbi->s_ftrfs_sb = kzalloc(sizeof(*sbi->s_ftrfs_sb), GFP_KERNEL);
 	if (!sbi->s_ftrfs_sb) {
 		ret = -ENOMEM;
 		goto out_free_sbi;
@@ -190,20 +184,29 @@ out_brelse:
 }
 
 /*
- * mount — VFS entry point
+ * fs_context ops — kernel 5.15+ mount API
  */
-static struct dentry *ftrfs_mount(struct file_system_type *fs_type,
-				  int flags, const char *dev_name, void *data)
+static int ftrfs_get_tree(struct fs_context *fc)
 {
-	return mount_bdev(fs_type, flags, dev_name, data, ftrfs_fill_super);
+	return get_tree_bdev(fc, ftrfs_fill_super);
+}
+
+static const struct fs_context_operations ftrfs_context_ops = {
+	.get_tree = ftrfs_get_tree,
+};
+
+static int ftrfs_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &ftrfs_context_ops;
+	return 0;
 }
 
 static struct file_system_type ftrfs_fs_type = {
-	.owner    = THIS_MODULE,
-	.name     = "ftrfs",
-	.mount    = ftrfs_mount,
-	.kill_sb  = kill_block_super,
-	.fs_flags = FS_REQUIRES_DEV,
+	.owner            = THIS_MODULE,
+	.name             = "ftrfs",
+	.init_fs_context  = ftrfs_init_fs_context,
+	.kill_sb          = kill_block_super,
+	.fs_flags         = FS_REQUIRES_DEV,
 };
 
 /*
@@ -226,7 +229,7 @@ static int __init ftrfs_init(void)
 		"ftrfs_inode_cache",
 		sizeof(struct ftrfs_inode_info),
 		0,
-		SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD | SLAB_ACCOUNT,
+		SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT,
 		ftrfs_inode_init_once);
 
 	if (!ftrfs_inode_cachep) {
@@ -248,10 +251,6 @@ static int __init ftrfs_init(void)
 static void __exit ftrfs_exit(void)
 {
 	unregister_filesystem(&ftrfs_fs_type);
-	/*
-	 * Ensure all RCU callbacks have run before destroying the cache,
-	 * same pattern as ext2/ext4.
-	 */
 	rcu_barrier();
 	kmem_cache_destroy(ftrfs_inode_cachep);
 	pr_info("ftrfs: module unloaded\n");
