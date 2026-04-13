@@ -108,6 +108,7 @@ struct dentry *ftrfs_lookup(struct inode *dir,
 			    !memcmp(de->d_name, dentry->d_name.name,
 				    de->d_name_len)) {
 				unsigned long ino = le64_to_cpu(de->d_ino);
+
 				brelse(bh);
 				inode = ftrfs_iget(sb, ino);
 				goto found;
