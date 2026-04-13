@@ -7,6 +7,8 @@ embedded Linux systems operating in space or other harsh conditions.
 
 This implementation is an out-of-tree kernel module targeting Linux 7.0+.
 
+RFC submitted to linux-fsdevel — April 13, 2026.
+
 ## Background
 
 FTRFS was originally described in:
@@ -54,6 +56,7 @@ Extended attributes (xattrs) are supported for SELinux labeling.
 | Inode read (CRC32)         | ✅ implemented |
 | Directory read/lookup      | ✅ implemented |
 | File read (generic)        | ✅ implemented |
+| address_space_operations   | ✅ implemented |
 | CRC32 checksumming         | ✅ implemented |
 | Block/inode allocator      | ✅ implemented |
 | Write path (create/mkdir)  | ✅ implemented |
