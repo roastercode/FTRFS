@@ -1,4 +1,4 @@
-# FTRFS - Fault-Tolerant Radiation-Robust Filesystem
+# FTRFS — Fault-Tolerant Radiation-Robust Filesystem
 
 FTRFS is a Linux kernel filesystem designed for dependable storage in
 radiation-intensive environments. It provides memory protection, checksumming,
@@ -55,11 +55,34 @@ Extended attributes (xattrs) are supported for SELinux labeling.
 | Directory read/lookup      | ✅ implemented |
 | File read (generic)        | ✅ implemented |
 | CRC32 checksumming         | ✅ implemented |
+| Block/inode allocator      | ✅ implemented |
+| Write path (create/mkdir)  | ✅ implemented |
 | Reed-Solomon FEC           | 🔧 in progress |
-| Write path                 | 🔧 in progress |
 | xattr / SELinux            | 🔧 planned     |
-| Bitmap allocator           | 🔧 planned     |
 | fsck.ftrfs                 | 🔧 planned     |
+
+## HPC Validation
+
+FTRFS has been validated as a data partition in an arm64 HPC cluster
+running Slurm 25.11.4, built with Yocto Styhead (5.1) and deployed
+on KVM/QEMU virtual machines (cortex-a57, Linux 7.0.0-rc7).
+
+Cluster topology: 1 master + 3 compute nodes, each with a dedicated
+FTRFS partition (64 MiB, /dev/vdb, mounted at /var/tmp/ftrfs).
+
+### Benchmark results — April 13, 2026
+
+| Test                                  | Result  |
+|---------------------------------------|---------|
+| Job submission latency (single node)  | 0.079s  |
+| 3-node parallel job (N=3, ntasks=3)   | 0.392s  |
+| 9-job throughput submission           | 0.481s  |
+| Job distribution                      | perfect |
+| FTRFS mount                           | ✅      |
+| ftrfs.ko load (arm64 kernel 7.0-rc7)  | ✅      |
+
+All nodes transitioned idle → running. FTRFS mounted and operational
+on all compute nodes throughout the benchmark.
 
 ## Requirements
 
@@ -87,7 +110,7 @@ bitbake ftrfs-module
 
 ```sh
 gcc -o mkfs.ftrfs mkfs.ftrfs.c
-dd if=/dev/zero of=test.img bs=4096 count=1024
+dd if=/dev/zero of=test.img bs=4096 count=16384
 ./mkfs.ftrfs test.img
 sudo insmod ftrfs.ko
 sudo mount -t ftrfs test.img /mnt
@@ -97,13 +120,15 @@ sudo mount -t ftrfs test.img /mnt
 
 ```
 ftrfs/
-├── Kconfig          — kernel configuration entry (planned)
+├── Kconfig          — kernel configuration entry
 ├── Makefile         — build system (out-of-tree + Yocto)
 ├── ftrfs.h          — on-disk and in-memory data structures
 ├── super.c          — superblock operations, mount/umount, module init
 ├── inode.c          — inode operations, iget with CRC32 verification
 ├── dir.c            — directory operations (readdir, lookup)
 ├── file.c           — file operations (read/write)
+├── namei.c          — create, mkdir, unlink, rmdir, link, write_inode
+├── alloc.c          — block and inode bitmap allocator
 ├── edac.c           — CRC32 checksumming (Reed-Solomon FEC: in progress)
 ├── mkfs.ftrfs.c     — userspace filesystem formatter
 └── COPYING          — GNU General Public License v2
