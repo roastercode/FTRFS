@@ -21,9 +21,14 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 	unsigned long block_idx, block_no;
 	unsigned int  offset;
 
-	/* Emit . and .. */
-	if (!dir_emit_dots(file, ctx))
+	/* EOF guard */
+	if (ctx->pos == INT_MAX)
 		return 0;
+	/* Emit . and .. (ctx->pos: 0=., 1=.., 2+=real entries) */
+	if (ctx->pos < 2) {
+		if (!dir_emit_dots(file, ctx))
+			return 0;
+	}
 
 	/* Iterate over direct blocks only (skeleton: no indirect yet) */
 	for (block_idx = 0; block_idx < FTRFS_DIRECT_BLOCKS; block_idx++) {
@@ -39,10 +44,8 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 		while (offset < FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
 
-			if (!de->d_rec_len) {
-				offset += sizeof(__le16); /* skip corrupt entry */
-				continue;
-			}
+			if (!de->d_rec_len)
+				break; /* end of dir block */
 
 			if (de->d_ino && de->d_name_len) {
 				if (!dir_emit(ctx,
@@ -62,13 +65,14 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 		brelse(bh);
 	}
 
+	ctx->pos = INT_MAX;
 	return 0;
 }
 
 /*
  * ftrfs_lookup — find dentry in directory
  */
-static struct dentry *ftrfs_lookup(struct inode *dir,
+struct dentry *ftrfs_lookup(struct inode *dir,
 				   struct dentry *dentry,
 				   unsigned int flags)
 {
@@ -96,17 +100,14 @@ static struct dentry *ftrfs_lookup(struct inode *dir,
 		while (offset < FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
 
-			if (!de->d_rec_len) {
-				offset += sizeof(__le16);
-				continue;
-			}
+			if (!de->d_rec_len)
+				break; /* end of dir block */
 
 			if (de->d_ino &&
 			    de->d_name_len == dentry->d_name.len &&
 			    !memcmp(de->d_name, dentry->d_name.name,
 				    de->d_name_len)) {
 				unsigned long ino = le64_to_cpu(de->d_ino);
-
 				brelse(bh);
 				inode = ftrfs_iget(sb, ino);
 				goto found;
@@ -127,6 +128,4 @@ const struct file_operations ftrfs_dir_operations = {
 	.iterate_shared = ftrfs_readdir,
 };
 
-const struct inode_operations ftrfs_dir_inode_operations = {
-	.lookup  = ftrfs_lookup,
-};
+

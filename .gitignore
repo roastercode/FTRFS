@@ -19,3 +19,4 @@ block.c
 *.cmd
 Module.symvers
 modules.order
+block.c
