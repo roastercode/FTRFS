@@ -244,7 +244,11 @@ struct inode *ftrfs_new_inode(struct inode *dir, umode_t mode)
 		set_nlink(inode, 1);
 	}
 
-	insert_inode_hash(inode);
+	if (insert_inode_locked(inode) < 0) {
+		make_bad_inode(inode);
+		iput(inode);
+		return ERR_PTR(-EIO);
+	}
 	mark_inode_dirty(inode);
 	return inode;
 }
