@@ -92,6 +92,7 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 	} else if (S_ISREG(inode->i_mode)) {
 		inode->i_op  = &ftrfs_file_inode_operations;
 		inode->i_fop = &ftrfs_file_operations;
+		inode->i_mapping->a_ops = &ftrfs_aops;
 	} else {
 		/* Special files: use generic */
 		init_special_inode(inode, inode->i_mode, 0);

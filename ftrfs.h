@@ -50,7 +50,7 @@ struct ftrfs_super_block {
 	__u8    s_uuid[16];         /* UUID */
 	__u8    s_label[32];        /* Volume label */
 	__u8    s_pad[3948];        /* Padding to 4096 bytes */
-} __attribute__((packed));
+} __packed;
 
 /*
  * On-disk inode
@@ -72,7 +72,7 @@ struct ftrfs_inode {
 	__le64  i_dindirect;        /* Double indirect */
 	__le32  i_crc32;            /* CRC32 of inode */
 	__u8    i_pad[2];           /* Padding to 128 bytes */
-} __attribute__((packed));
+} __packed;
 
 /* Inode flags */
 #define FTRFS_INODE_FL_RS_ENABLED   0x0001  /* RS FEC enabled */
@@ -87,7 +87,7 @@ struct ftrfs_dir_entry {
 	__u8    d_name_len;         /* Name length */
 	__u8    d_file_type;        /* File type */
 	char    d_name[FTRFS_MAX_FILENAME + 1]; /* Filename */
-} __attribute__((packed));
+} __packed;
 
 /*
  * In-memory superblock info (stored in sb->s_fs_info)
@@ -140,6 +140,7 @@ extern const struct inode_operations ftrfs_dir_inode_operations;
 /* file.c */
 extern const struct file_operations ftrfs_file_operations;
 extern const struct inode_operations ftrfs_file_inode_operations;
+extern const struct address_space_operations ftrfs_aops;
 
 /* edac.c */
 __u32 ftrfs_crc32(const void *buf, size_t len);
@@ -162,7 +163,7 @@ u64  ftrfs_alloc_inode_num(struct super_block *sb);
 
 /* dir.c */
 struct dentry *ftrfs_lookup(struct inode *dir, struct dentry *dentry,
-                            unsigned int flags);
+			    unsigned int flags);
 
 /* namei.c */
 int ftrfs_write_inode(struct inode *inode, struct writeback_control *wbc);

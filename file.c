@@ -9,6 +9,8 @@
 
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/buffer_head.h>
+#include <linux/mpage.h>
 #include "ftrfs.h"
 
 const struct file_operations ftrfs_file_operations = {
@@ -22,4 +24,44 @@ const struct file_operations ftrfs_file_operations = {
 
 const struct inode_operations ftrfs_file_inode_operations = {
 	.getattr        = simple_getattr,
+};
+
+/*
+ * ftrfs_get_block — map logical block number to physical block
+ *
+ * Supports direct blocks only for now. Indirect blocks planned for v2.
+ */
+static int ftrfs_get_block(struct inode *inode, sector_t iblock,
+			    struct buffer_head *bh_result, int create)
+{
+	struct ftrfs_inode_info *fi = FTRFS_I(inode);
+	__le64 phys;
+
+	if (iblock >= FTRFS_DIRECT_BLOCKS) {
+		pr_err("ftrfs: indirect block access not yet supported\n");
+		return -EOPNOTSUPP;
+	}
+
+	phys = fi->i_direct[iblock];
+	if (!phys)
+		return 0;
+
+	map_bh(bh_result, inode->i_sb, le64_to_cpu(phys));
+	return 0;
+}
+
+static int ftrfs_read_folio(struct file *file, struct folio *folio)
+{
+	return block_read_full_folio(folio, ftrfs_get_block);
+}
+
+static int ftrfs_writepages(struct address_space *mapping,
+			    struct writeback_control *wbc)
+{
+	return mpage_writepages(mapping, wbc, ftrfs_get_block);
+}
+
+const struct address_space_operations ftrfs_aops = {
+	.read_folio     = ftrfs_read_folio,
+	.writepages     = ftrfs_writepages,
 };
