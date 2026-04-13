@@ -1,4 +1,4 @@
-# FTRFS — Fault-Tolerant Radiation-Robust Filesystem
+# FTRFS - Fault-Tolerant Radiation-Robust Filesystem
 
 FTRFS is a Linux kernel filesystem designed for dependable storage in
 radiation-intensive environments. It provides memory protection, checksumming,
