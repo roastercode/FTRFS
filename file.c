@@ -61,7 +61,39 @@ static int ftrfs_writepages(struct address_space *mapping,
 	return mpage_writepages(mapping, wbc, ftrfs_get_block);
 }
 
+
+static void ftrfs_readahead(struct readahead_control *rac)
+{
+	mpage_readahead(rac, ftrfs_get_block);
+}
+
+static int ftrfs_write_begin(const struct kiocb *iocb,
+			     struct address_space *mapping,
+			     loff_t pos, unsigned len,
+			     struct folio **foliop, void **fsdata)
+{
+	return block_write_begin(mapping, pos, len, foliop, ftrfs_get_block);
+}
+
+static int ftrfs_write_end(const struct kiocb *iocb,
+			   struct address_space *mapping,
+			   loff_t pos, unsigned len, unsigned copied,
+			   struct folio *folio, void *fsdata)
+{
+	return generic_write_end(iocb, mapping, pos, len, copied, folio, fsdata);
+}
+
+static sector_t ftrfs_bmap(struct address_space *mapping, sector_t block)
+{
+	return generic_block_bmap(mapping, block, ftrfs_get_block);
+}
 const struct address_space_operations ftrfs_aops = {
 	.read_folio     = ftrfs_read_folio,
+	.readahead      = ftrfs_readahead,
+	.write_begin    = ftrfs_write_begin,
+	.write_end      = ftrfs_write_end,
 	.writepages     = ftrfs_writepages,
+	.bmap           = ftrfs_bmap,
+	.dirty_folio    = block_dirty_folio,
+	.invalidate_folio = block_invalidate_folio,
 };
