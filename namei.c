@@ -245,7 +245,6 @@ struct inode *ftrfs_new_inode(struct inode *dir, umode_t mode)
 	}
 
 	insert_inode_hash(inode);
-	unlock_new_inode(inode);
 	mark_inode_dirty(inode);
 	return inode;
 }
@@ -277,9 +276,11 @@ static int ftrfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		goto out_iput;
 
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 	return 0;
 
 out_iput:
+	unlock_new_inode(inode);
 	iput(inode);
 	return ret;
 }
@@ -327,9 +328,11 @@ static struct dentry *ftrfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 		goto out_fail;
 
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 	return NULL;
 
 out_fail:
+	unlock_new_inode(inode);
 	inode_dec_link_count(inode);
 	inode_dec_link_count(inode);
 	iput(inode);

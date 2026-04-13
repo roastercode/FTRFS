@@ -47,7 +47,10 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 			if (!de->d_rec_len)
 				break; /* end of dir block */
 
-			if (de->d_ino && de->d_name_len) {
+			/* Skip . and .. — emitted by dir_emit_dots */
+			if (de->d_ino && de->d_name_len &&
+			    !(de->d_name_len == 1 && de->d_name[0] == '.') &&
+			    !(de->d_name_len == 2 && de->d_name[0] == '.' && de->d_name[1] == '.')) {
 				if (!dir_emit(ctx,
 					      de->d_name,
 					      de->d_name_len,
