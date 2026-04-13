@@ -63,11 +63,10 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 
 	/* Populate VFS inode */
 	inode->i_mode  = le16_to_cpu(raw->i_mode);
-	inode->i_uid   = make_kuid(sb->s_user_ns, le16_to_cpu(raw->i_uid));
-	inode->i_gid   = make_kgid(sb->s_user_ns, le16_to_cpu(raw->i_gid));
+	inode->i_uid   = make_kuid(sb->s_user_ns, le32_to_cpu(raw->i_uid));
+	inode->i_gid   = make_kgid(sb->s_user_ns, le32_to_cpu(raw->i_gid));
 	set_nlink(inode, le16_to_cpu(raw->i_nlink));
 	inode->i_size  = le64_to_cpu(raw->i_size);
-	inode->i_blocks = le32_to_cpu(raw->i_blocks);
 
 	inode_set_atime(inode,
 		le64_to_cpu(raw->i_atime) / NSEC_PER_SEC,
@@ -83,6 +82,7 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 	memcpy(fi->i_direct, raw->i_direct, sizeof(fi->i_direct));
 	fi->i_indirect  = raw->i_indirect;
 	fi->i_dindirect = raw->i_dindirect;
+	fi->i_tindirect = raw->i_tindirect;
 	fi->i_flags     = le32_to_cpu(raw->i_flags);
 
 	/* Set ops based on file type */

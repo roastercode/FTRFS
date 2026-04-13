@@ -252,6 +252,8 @@ static int __init ftrfs_init(void)
 		return ret;
 	}
 
+	BUILD_BUG_ON(sizeof(struct ftrfs_super_block) != FTRFS_BLOCK_SIZE);
+	BUILD_BUG_ON(sizeof(struct ftrfs_inode) != 256);
 	pr_info("ftrfs: module loaded (FTRFS Fault-Tolerant Radiation-Robust FS)\n");
 	return 0;
 }
@@ -267,7 +269,7 @@ static void __exit ftrfs_exit(void)
 module_init(ftrfs_init);
 module_exit(ftrfs_exit);
 
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
 MODULE_AUTHOR("roastercode - Aurelien DESBRIERES <aurelien@hackers.camp>");
 MODULE_DESCRIPTION("FTRFS: Fault-Tolerant Radiation-Robust Filesystem");
 MODULE_VERSION("0.1.0");
