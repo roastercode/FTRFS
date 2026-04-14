@@ -13,10 +13,9 @@
 #include <linux/fs_context.h>
 #include <linux/types.h>
 
-/* Compat: inode_state_read_once introduced in kernel 7.0 */
-#ifndef inode_state_read_once
-#define inode_state_read_once(inode) READ_ONCE((inode)->i_state)
-#endif
+/* inode_state_read_once returns inode_state_flags in kernel 7.0 */
+#define ftrfs_inode_is_new(inode) \
+	(inode_state_read_once(inode) & I_NEW)
 
 /* Magic number: 'FTRF' */
 #define FTRFS_MAGIC         0x46545246
