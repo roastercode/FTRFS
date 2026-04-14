@@ -60,14 +60,6 @@ int ftrfs_rs_encode(uint8_t *data, uint8_t *parity)
 	return 0;
 }
 
-/* Galois Field division */
-static uint8_t gf_div(uint8_t a, uint8_t b)
-{
-	if (b == 0 || a == 0)
-		return 0;
-	return gf_exp[(gf_log[a] - gf_log[b] + 255) % 255];
-}
-
 /* Galois Field power */
 static uint8_t gf_pow(uint8_t x, int power)
 {
