@@ -97,7 +97,7 @@ sizeof(ftrfs_super_block) == 4096 at compile time.
 | 0 BUG/WARN/Oops kernel 7.0    | ✅ validated        | v2      |
 | Assisted-by tag (DCO)         | ✅ declared         | v2      |
 | iomap IO path                  | 🔧 planned          | v3      |
-| rename                         | 🔧 planned          | v3      |
+| rename                         | ✅ implemented      | v3      |
 | RS FEC decoder                 | 🔧 planned          | v3      |
 | Radiation Event Journal        | 🔧 planned          | v3      |
 | kthread scrubber (RT)          | 🔧 planned          | v4      |
@@ -112,7 +112,7 @@ recommended by Matthew Wilcox (linux-fsdevel review). Required for upstream
 consideration. ext2 in kernel 7.0 already uses iomap for DAX/DIO; buffered
 IO will follow for FTRFS.
 
-**rename** — Implement `ftrfs_rename` in `namei.c`.
+**rename** — ✅ Implemented `ftrfs_rename` in `namei.c`. Handles same-dir and cross-dir rename for files and directories. RENAME_EXCHANGE and RENAME_WHITEOUT not supported (returns -EINVAL).
 
 **RS FEC decoder** — Complete the Reed-Solomon correction layer in `edac.c`.
 The encoder is present in v2; the decoder (in-place correction of corrupted
@@ -153,7 +153,7 @@ latency — essential for hard real-time embedded targets.
 
 FTRFS has been validated as a data partition in an arm64 HPC cluster
 running Slurm 25.11.4, built with Yocto Styhead (5.1) and deployed on
-KVM/QEMU virtual machines (cortex-a57, Linux 7.0.0-rc7).
+KVM/QEMU virtual machines (cortex-a57, Linux 7.0.0 final).
 
 Cluster topology: 1 master + 3 compute nodes, each with a dedicated
 FTRFS partition (64 MiB, /dev/vdb).
@@ -168,6 +168,21 @@ FTRFS partition (64 MiB, /dev/vdb).
 | FTRFS mount                           | ✅      |
 | ftrfs.ko (arm64, kernel 7.0-rc7)      | ✅      |
 | 0 BUG/WARN/Oops                       | ✅      |
+
+### Benchmark — April 14, 2026 (v3 rename — kernel 7.0 final)
+
+| Test                                  | Result  | vs v2   |
+|---------------------------------------|---------|---------|
+| Job submission latency (single node)  | 0.257s  | +247%   |
+| 3-node parallel job (N=3, ntasks=3)   | 0.334s  | -13%    |
+| 9-job throughput submission           | 0.040s  | -92%    |
+| rename file (mv old.txt new.txt)      | ✅      | new     |
+| rename directory (cross-dir)          | ✅      | new     |
+| 0 BUG/WARN/Oops                       | ✅      | —       |
+
+Note: job submission latency increase vs v2 is attributable to
+Slurm/network configuration changes (192.168.57→192.168.56 subnet
+correction in Yocto images), not to filesystem performance.
 
 Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
@@ -239,7 +254,7 @@ ftrfs/
 ├── inode.c          — inode operations, CRC32 verification
 ├── dir.c            — directory operations (readdir, lookup)
 ├── file.c           — file operations, address_space_operations
-├── namei.c          — create, mkdir, unlink, rmdir, link, write_inode
+├── namei.c          — create, mkdir, unlink, rmdir, link, rename, write_inode
 ├── alloc.c          — block and inode bitmap allocator
 ├── edac.c           — CRC32 checksumming, RS FEC encoder
 ├── mkfs.ftrfs.c     — userspace formatter
