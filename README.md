@@ -46,7 +46,7 @@ assistant, in compliance with the Linux kernel AI coding policy
 
 The human submitter takes full responsibility for every line of code,
 has reviewed, tested, and debugged it on real hardware (arm64 KVM,
-kernel 7.0-rc7), and certifies the DCO accordingly.
+kernel 7.0 final), and certifies the DCO accordingly.
 
 v3 patches will carry the formal attribution tag:
 
@@ -98,8 +98,8 @@ sizeof(ftrfs_super_block) == 4096 at compile time.
 | Assisted-by tag (DCO)         | ✅ declared         | v2      |
 | iomap IO path                  | 🔧 planned          | v3      |
 | rename                         | ✅ implemented      | v3      |
-| RS FEC decoder                 | 🔧 planned          | v3      |
-| Radiation Event Journal        | 🔧 planned          | v3      |
+| RS FEC decoder                 | ✅ implemented      | v3      |
+| Radiation Event Journal        | ✅ implemented      | v3      |
 | kthread scrubber (RT)          | 🔧 planned          | v4      |
 | xfstests run                   | 🔧 planned          | v3      |
 
@@ -114,28 +114,28 @@ IO will follow for FTRFS.
 
 **rename** — ✅ Implemented `ftrfs_rename` in `namei.c`. Handles same-dir and cross-dir rename for files and directories. RENAME_EXCHANGE and RENAME_WHITEOUT not supported (returns -EINVAL).
 
-**RS FEC decoder** — Complete the Reed-Solomon correction layer in `edac.c`.
-The encoder is present in v2; the decoder (in-place correction of corrupted
-blocks) is the critical missing piece.
+**RS FEC decoder** — ✅ Implemented full RS(255,239) decoder in `edac.c`.
+Berlekamp-Massey error locator polynomial, Chien search for error positions,
+Forney algorithm for in-place magnitude correction. Corrects up to 8 symbol
+errors per 255-byte subblock. Returns -EBADMSG if uncorrectable.
 
-**Radiation Event Journal** — A persistent ring buffer in the superblock
-recording every RS correction event:
+**Radiation Event Journal** — ✅ Implemented. Persistent ring buffer of
+64 entries × 24 bytes in the superblock reserved area:
 
 ```c
 struct ftrfs_rs_event {
-    __le64  block_no;    /* corrected block number */
-    __le64  timestamp;   /* nanoseconds since boot  */
-    __le32  error_bits;  /* number of bits corrected */
-    __le32  crc32;       /* integrity of this entry  */
-} __packed;              /* 24 bytes per entry       */
+    __le64  re_block_no;    /* corrected block number */
+    __le64  re_timestamp;   /* nanoseconds since boot  */
+    __le32  re_error_bits;  /* number of symbols corrected */
+    __le32  re_crc32;       /* CRC32 of this entry */
+} __packed;                 /* 24 bytes per entry */
 ```
 
-64 entries × 24 bytes = 1536 bytes, fits within existing superblock
-reserved space. This gives operators a persistent map of physical
-degradation — which zones of MRAM/NOR Flash accumulate errors over time.
-No existing Linux filesystem provides this. VxWorks HRFS, btrfs scrub,
-and NVMe SMART all operate at different layers without this filesystem-level
-view of radiation-induced physical corruption history.
+ftrfs_log_rs_event() writes under spinlock and marks the superblock
+buffer dirty for persistence. sizeof(ftrfs_super_block) == 4096
+enforced by BUILD_BUG_ON. No existing Linux filesystem provides this
+filesystem-level radiation event history — VxWorks HRFS, btrfs scrub,
+and NVMe SMART all operate at different layers.
 
 **xfstests** — Minimal test run (generic/001, generic/002, generic/010)
 before v3 submission.
@@ -183,6 +183,17 @@ FTRFS partition (64 MiB, /dev/vdb).
 Note: job submission latency increase vs v2 is attributable to
 Slurm/network configuration changes (192.168.57→192.168.56 subnet
 correction in Yocto images), not to filesystem performance.
+
+### Benchmark — April 14, 2026 (v3 RS decoder + Radiation Event Journal)
+
+| Test                                  | Result  | vs v2   |
+|---------------------------------------|---------|---------|
+| Job submission latency (single node)  | 0.271s  | stable  |
+| 3-node parallel job (N=3, ntasks=3)   | 0.330s  | -14%    |
+| 9-job throughput submission           | 0.046s  | -90%    |
+| RS FEC decode (no errors)             | ✅      | new     |
+| Radiation Event Journal write         | ✅      | new     |
+| 0 BUG/WARN/Oops                       | ✅      | —       |
 
 Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
@@ -250,13 +261,13 @@ ftrfs/
 ├── Kconfig          — kernel configuration
 ├── Makefile         — build system
 ├── ftrfs.h          — on-disk and in-memory structures
-├── super.c          — superblock, mount/umount, module init
+├── super.c          — superblock, mount/umount, Radiation Event Journal, module init
 ├── inode.c          — inode operations, CRC32 verification
 ├── dir.c            — directory operations (readdir, lookup)
 ├── file.c           — file operations, address_space_operations
 ├── namei.c          — create, mkdir, unlink, rmdir, link, rename, write_inode
 ├── alloc.c          — block and inode bitmap allocator
-├── edac.c           — CRC32 checksumming, RS FEC encoder
+├── edac.c           — CRC32 checksumming, RS FEC encoder + decoder (Berlekamp-Massey)
 ├── mkfs.ftrfs.c     — userspace formatter
 └── COPYING          — GNU General Public License v2
 ```
