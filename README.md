@@ -67,6 +67,38 @@ and is currently incorporating review feedback before a future resubmission.
 
 ---
 
+## System Architecture
+
+FTRFS is designed as a **data partition** filesystem within a complete
+hardened embedded Linux storage stack. It complements, rather than
+replaces, dm-verity and squashfs:
+
+```
+/boot      ext4 or squashfs (read-only)
+           bootloader, kernel, device tree
+
+/          squashfs + dm-verity (read-only)
+           OS binaries verified at boot via Merkle tree
+           SEU on rootfs → I/O error, system reboots from verified image
+
+/data      FTRFS (read-write)
+           mission data, application state
+           SEU on data → in-place RS correction, event logged
+
+/var/log   FTRFS (read-write)
+           system logs, radiation event history
+```
+
+dm-verity detects and rejects corruption on read-only volumes.
+FTRFS detects and corrects corruption on read-write volumes.
+They address different partitions and different failure modes.
+
+See [Documentation/system-architecture.md](Documentation/system-architecture.md)
+for a detailed comparison with VxWorks HRFS, PikeOS, and dm-verity,
+and for a discussion of post-quantum integrity extensions.
+
+---
+
 ## On-disk Layout
 
 ```
@@ -173,9 +205,10 @@ ftrfs/
 ├── edac.c            CRC32, RS FEC via lib/reed_solomon
 ├── mkfs.ftrfs.c      userspace formatter
 ├── Documentation/
-│   ├── design.md     on-disk format specification
-│   ├── testing.md    test procedure and results
-│   └── roadmap.md    what is done, what remains
+│   ├── design.md             on-disk format specification
+│   ├── system-architecture.md  positioning, stack design, comparison
+│   ├── testing.md            test procedure and results
+│   └── roadmap.md            what is done, what remains
 └── COPYING           GNU General Public License v2
 ```
 
