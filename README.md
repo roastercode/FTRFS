@@ -47,106 +47,101 @@ This is an out-of-tree module, actively maintained and validated on arm64
 kernel 7.0. It has been submitted as an RFC to linux-fsdevel (April 2026)
 and is currently incorporating review feedback before a future resubmission.
 
-| Feature                             | Status         |
-|-------------------------------------|----------------|
-| Superblock mount/umount             | ✅ implemented |
-| Inode read/write with CRC32         | ✅ implemented |
-| RS FEC on inode metadata            | ✅ implemented |
-| Directory read/lookup/create        | ✅ implemented |
-| File read/write (iomap path)        | ✅ implemented |
-| Block and inode allocator           | ✅ implemented |
-| RS FEC encode/decode (lib/reed_solomon) | ✅ implemented |
-| Radiation Event Journal             | ✅ implemented |
-| rename (same-dir and cross-dir)     | ✅ implemented |
-| checkpatch.pl --strict: 0 issues    | ✅ validated   |
-| arm64 KVM, kernel 7.0, 0 BUG/WARN  | ✅ validated   |
-| Slurm HPC cluster validation        | ✅ validated   |
-| On-disk bitmap allocator            | 🔧 planned     |
-| kthread scrubber (RT priority)      | 🔧 planned     |
-| xfstests recipe (Yocto)             | 🔧 planned     |
+| Feature                                      | Status         |
+|----------------------------------------------|----------------|
+| Superblock mount/umount                      | ✅ implemented |
+| Inode read/write with CRC32                  | ✅ implemented |
+| RS FEC on inode metadata                     | ✅ implemented |
+| Directory read/lookup/create                 | ✅ implemented |
+| File read/write (iomap path)                 | ✅ implemented |
+| Block and inode allocator                    | ✅ implemented |
+| RS FEC encode/decode (lib/reed_solomon)      | ✅ implemented |
+| Radiation Event Journal                      | ✅ implemented |
+| rename (same-dir and cross-dir)              | ✅ implemented |
+| On-disk bitmap block with RS FEC (v2)        | ✅ implemented |
+| mkfs.ftrfs parity matches lib/reed_solomon   | ✅ validated   |
+| checkpatch.pl --strict: 0 issues             | ✅ validated   |
+| arm64 KVM, kernel 7.0, 0 BUG/WARN           | ✅ validated   |
+| Slurm HPC cluster validation (4 nodes)       | ✅ validated   |
+| kthread scrubber (RT priority)               | 🔧 planned     |
+| xfstests recipe (Yocto)                      | 🔧 planned     |
+| Indirect block support                       | 🔧 planned     |
 
 ---
 
-## System Architecture
-
-FTRFS is designed as a **data partition** filesystem within a complete
-hardened embedded Linux storage stack. It complements, rather than
-replaces, dm-verity and squashfs:
+## On-disk Layout (v2)
 
 ```
-/boot      ext4 or squashfs (read-only)
-           bootloader, kernel, device tree
-
-/          squashfs + dm-verity (read-only)
-           OS binaries verified at boot via Merkle tree
-           SEU on rootfs → I/O error, system reboots from verified image
-
-/data      FTRFS (read-write)
-           mission data, application state
-           SEU on data → in-place RS correction, event logged
-
-/var/log   FTRFS (read-write)
-           system logs, radiation event history
+Block 0        superblock (magic 0x46545246, 4096 bytes, CRC32 verified)
+Block 1..N     inode table (256 bytes/inode)
+Block N+1      bitmap block (RS FEC protected — 16 subblocks RS(255,239))
+Block N+2      root directory data
+Block N+3..end data blocks
 ```
 
-dm-verity detects and rejects corruption on read-only volumes.
-FTRFS detects and corrects corruption on read-write volumes.
-They address different partitions and different failure modes.
-
-See [Documentation/system-architecture.md](Documentation/system-architecture.md)
-for a detailed comparison with VxWorks HRFS, PikeOS, and dm-verity,
-and for a discussion of post-quantum integrity extensions.
-
----
-
-## On-disk Layout
-
-```
-Block 0        : superblock (magic 0x46545246, 4096 bytes)
-Block 1..N     : inode table (256 bytes/inode)
-Block N+1..end : data blocks
-```
-
-The superblock contains a persistent Radiation Event Journal: a ring buffer
-of 64 entries recording each RS correction event (block number, timestamp,
-symbols corrected, per-entry CRC32).
-
-The inode is 256 bytes. The first 172 bytes are protected by a RS(255,239)
-codeword; parity is stored in `i_reserved[0..15]`. A per-inode CRC32 covers
-the full inode.
+The bitmap block stores the free-block allocation state in 16 subblocks
+of 239 data bytes each, followed by 16 bytes of Reed-Solomon parity.
+At mount time, the kernel decodes each subblock and corrects SEU-induced
+errors in place. No existing Linux filesystem applies RS FEC to its own
+allocation metadata.
 
 See [Documentation/design.md](Documentation/design.md) for the complete
 on-disk format specification.
 
 ---
 
+## System Architecture
+
+FTRFS is designed as a **data partition** filesystem within a complete
+hardened embedded Linux storage stack:
+
+```
+/boot      ext4 or squashfs (read-only)
+/          squashfs + dm-verity (read-only)
+           SEU on rootfs → I/O error, reboot from verified image
+/data      FTRFS (read-write)
+           SEU on data → in-place RS correction, event logged
+/var/log   FTRFS (read-write)
+```
+
+See [Documentation/system-architecture.md](Documentation/system-architecture.md)
+for a detailed comparison with VxWorks HRFS, PikeOS, and dm-verity.
+
+---
+
 ## Reed-Solomon Implementation
 
-FTRFS uses the kernel's `lib/reed_solomon` library (`rslib.h`, `encode_rs8`,
-`decode_rs8`). No custom Galois Field arithmetic is implemented. The codec
-is initialized once at module load via `init_rs(8, 0x187, 0, 1, 16)`:
+FTRFS uses the kernel's `lib/reed_solomon` library (`encode_rs8`, `decode_rs8`).
+No custom Galois Field arithmetic is implemented in the kernel module.
+The codec is initialized once at module load:
 
-- Symbol size: 8 bits (GF(2^8))
-- Primitive polynomial: 0x187
-- Parity symbols: 16 (corrects up to 8 symbol errors per subblock)
-- Data per subblock: 239 bytes
-- Codeword: 255 bytes (RS(255,239))
+```c
+init_rs(8, 0x187, 0, 1, 16)
+// GF(2^8), primitive polynomial 0x187
+// fcr=0: roots alpha^0..alpha^15
+// 16 parity bytes per 239-byte subblock
+// Corrects up to 8 symbol errors per subblock
+```
+
+`mkfs.ftrfs` reproduces the same GF arithmetic and generator polynomial
+exactly, verified byte-for-byte against the kernel output.
 
 ---
 
 ## HPC Validation
 
-FTRFS has been validated as a data partition in an arm64 Slurm 25.11.4
-cluster built with Yocto Styhead (5.1), deployed on KVM/QEMU (cortex-a57,
-Linux 7.0.0). Cluster: 1 master + 3 compute nodes, each with a 64 MiB
-FTRFS partition on `/dev/vdb`.
+Validated as a data partition in an arm64 Slurm 25.11.4 cluster built
+with Yocto Styhead (5.1), deployed on KVM/QEMU (cortex-a57, Linux 7.0.0).
+Cluster: 1 master + 3 compute nodes, each with FTRFS on `/data`.
 
-| Test                             | Result  |
-|----------------------------------|---------|
-| Job submission latency           | 0.378s  |
-| 3-node parallel job              | 0.336s  |
-| 9-job throughput                 | 0.052s  |
-| 0 BUG/WARN/Oops                  | ✅      |
+| Test                             | Result   |
+|----------------------------------|----------|
+| Job submission latency           | ~0.25s   |
+| 3-node parallel job              | 0.34s    |
+| 9-job batch throughput           | 4.37s    |
+| FTRFS mount (4 nodes)            | zero RS errors ✅ |
+| FTRFS write from Slurm job       | ✅       |
+| 0 BUG/WARN/Oops                  | ✅       |
 
 Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
@@ -175,6 +170,7 @@ sudo insmod ftrfs.ko
 ```sh
 source <yocto>/oe-init-build-env <build-dir>
 bitbake ftrfs-module
+bitbake mkfs-ftrfs
 ```
 
 ### Format and mount
@@ -201,14 +197,15 @@ ftrfs/
 ├── dir.c             directory operations (readdir, lookup)
 ├── file.c            file operations, iomap IO path
 ├── namei.c           create, mkdir, unlink, rmdir, link, rename
-├── alloc.c           block and inode bitmap allocator
+├── alloc.c           block/inode bitmap allocator + on-disk RS FEC bitmap
 ├── edac.c            CRC32, RS FEC via lib/reed_solomon
-├── mkfs.ftrfs.c      userspace formatter
+├── mkfs.ftrfs.c      userspace formatter (RS parity matches kernel exactly)
 ├── Documentation/
-│   ├── design.md             on-disk format specification
+│   ├── design.md             on-disk format specification (v2)
 │   ├── system-architecture.md  positioning, stack design, comparison
 │   ├── testing.md            test procedure and results
-│   └── roadmap.md            what is done, what remains
+│   ├── roadmap.md            what is done, what remains
+│   └── RAF.md                consolidated action plan
 └── COPYING           GNU General Public License v2
 ```
 
@@ -222,8 +219,8 @@ Message-ID: `<20260414120726.5713-1-aurelien@hackers.camp>`
 Active reviewers: Matthew Wilcox, Pedro Falcato, Darrick J. Wong,
 Andreas Dilger, Eric Biggers, Gao Xiang.
 
-Status: incorporating review feedback. Next submission planned after
-xfstests integration and on-disk bitmap allocator.
+Status: incorporating review feedback. Next submission (v4) planned after
+xfstests integration and indirect block support.
 
 ---
 
