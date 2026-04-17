@@ -26,8 +26,15 @@
 
 /* RS FEC: 16 parity bytes per 239-byte subblock (RS(255,239)) */
 #define FTRFS_RS_PARITY     16
+#define FTRFS_INODE_RS_DATA offsetof(struct ftrfs_inode, i_reserved)  /* 172 bytes */
+#define FTRFS_INODE_RS_PAR  16  /* parity bytes stored in i_reserved[0..15] */
 #define FTRFS_SUBBLOCK_DATA 239
 #define FTRFS_SUBBLOCK_TOTAL (FTRFS_SUBBLOCK_DATA + FTRFS_RS_PARITY)
+
+/* On-disk bitmap block layout (RS FEC protected) */
+#define FTRFS_BITMAP_SUBBLOCKS  16   /* subblocks per bitmap block */
+#define FTRFS_BITMAP_DATA_BYTES (FTRFS_BITMAP_SUBBLOCKS * FTRFS_SUBBLOCK_DATA) /* 3824 */
+#define FTRFS_BITMAP_MAX_BLOCKS (FTRFS_BITMAP_DATA_BYTES * 8) /* 30592 */
 
 /* Filesystem limits */
 #define FTRFS_MAX_FILENAME  255
@@ -70,7 +77,8 @@ struct ftrfs_super_block {
 	__u8    s_label[32];        /* Volume label */
 	 struct ftrfs_rs_event s_rs_journal[FTRFS_RS_JOURNAL_SIZE]; /* 1536 bytes */
 	__u8    s_rs_journal_head;  /* next write index (ring buffer) */
-	__u8    s_pad[2443];        /* Padding to 4096 bytes */
+	__le64  s_bitmap_blk;       /* On-disk block bitmap block number */
+	__u8    s_pad[2435];        /* Padding to 4096 bytes */
 } __packed;
 
 /*
@@ -127,8 +135,13 @@ struct ftrfs_sb_info {
 	unsigned long    *s_block_bitmap;  /* In-memory free block bitmap */
 	unsigned long     s_nblocks;       /* Number of data blocks */
 	unsigned long     s_data_start;    /* First data block number */
+	/* Inode allocator */
+	unsigned long    *s_inode_bitmap;  /* In-memory free inode bitmap */
+	unsigned long     s_ninodes;       /* Total number of inodes */
+	/* Superblock */
 	struct ftrfs_super_block *s_ftrfs_sb; /* On-disk superblock copy */
 	struct buffer_head       *s_sbh;      /* Buffer head for superblock */
+	struct buffer_head       *s_bitmap_blkh; /* Buffer head for on-disk bitmap */
 	spinlock_t                s_lock;     /* Superblock lock */
 	unsigned long             s_free_blocks;
 	unsigned long             s_free_inodes;
@@ -175,23 +188,21 @@ extern const struct inode_operations ftrfs_file_inode_operations;
 extern const struct address_space_operations ftrfs_aops;
 
 /* edac.c */
+void ftrfs_rs_init_tables(void);
+void ftrfs_rs_exit_tables(void);
 __u32 ftrfs_crc32(const void *buf, size_t len);
-int ftrfs_rs_encode(uint8_t *data, uint8_t *parity);
-int ftrfs_rs_decode(uint8_t *data, uint8_t *parity);
-
-/* block.c */
-
-#endif /* _FTRFS_H */
-
-/*
- */
+__u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb);
+int ftrfs_rs_encode(u8 *data, u8 *parity);
+int ftrfs_rs_decode(u8 *data, u8 *parity);
 
 /* alloc.c */
 int  ftrfs_setup_bitmap(struct super_block *sb);
+int  ftrfs_write_bitmap(struct super_block *sb);
 void ftrfs_destroy_bitmap(struct super_block *sb);
 u64  ftrfs_alloc_block(struct super_block *sb);
 void ftrfs_free_block(struct super_block *sb, u64 block);
 u64  ftrfs_alloc_inode_num(struct super_block *sb);
+void ftrfs_free_inode_num(struct super_block *sb, u64 ino);
 
 /* dir.c */
 struct dentry *ftrfs_lookup(struct inode *dir, struct dentry *dentry,
@@ -199,3 +210,5 @@ struct dentry *ftrfs_lookup(struct inode *dir, struct dentry *dentry,
 
 /* namei.c */
 int ftrfs_write_inode(struct inode *inode, struct writeback_control *wbc);
+
+#endif /* _FTRFS_H */
