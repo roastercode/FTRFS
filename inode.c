@@ -34,7 +34,7 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 		return ERR_PTR(-ENOMEM);
 
 	/* Already in cache */
-	if (!(inode_state_read_once(inode) & I_NEW))
+	if (!ftrfs_inode_is_new(inode))
 		return inode;
 
 	inodes_per_block = FTRFS_BLOCK_SIZE / sizeof(struct ftrfs_inode);
@@ -69,14 +69,14 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 	inode->i_size  = le64_to_cpu(raw->i_size);
 
 	inode_set_atime(inode,
-		le64_to_cpu(raw->i_atime) / NSEC_PER_SEC,
-		le64_to_cpu(raw->i_atime) % NSEC_PER_SEC);
+			le64_to_cpu(raw->i_atime) / NSEC_PER_SEC,
+			le64_to_cpu(raw->i_atime) % NSEC_PER_SEC);
 	inode_set_mtime(inode,
-		le64_to_cpu(raw->i_mtime) / NSEC_PER_SEC,
-		le64_to_cpu(raw->i_mtime) % NSEC_PER_SEC);
+			le64_to_cpu(raw->i_mtime) / NSEC_PER_SEC,
+			le64_to_cpu(raw->i_mtime) % NSEC_PER_SEC);
 	inode_set_ctime(inode,
-		le64_to_cpu(raw->i_ctime) / NSEC_PER_SEC,
-		le64_to_cpu(raw->i_ctime) % NSEC_PER_SEC);
+			le64_to_cpu(raw->i_ctime) / NSEC_PER_SEC,
+			le64_to_cpu(raw->i_ctime) % NSEC_PER_SEC);
 
 	/* Copy block pointers to in-memory inode */
 	memcpy(fi->i_direct, raw->i_direct, sizeof(fi->i_direct));

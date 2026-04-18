@@ -123,8 +123,8 @@ static ssize_t ftrfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
  * Writeback path — ftrfs_writeback_ops
  */
 static ssize_t ftrfs_writeback_range(struct iomap_writepage_ctx *wpc,
-				  struct folio *folio, u64 offset,
-				  unsigned int len, u64 end_pos)
+				     struct folio *folio, u64 offset,
+				     unsigned int len, u64 end_pos)
 {
 	if (offset < wpc->iomap.offset ||
 	    offset >= wpc->iomap.offset + wpc->iomap.length) {
@@ -194,4 +194,5 @@ const struct address_space_operations ftrfs_aops = {
 	.dirty_folio      = iomap_dirty_folio,
 	.invalidate_folio = iomap_invalidate_folio,
 	.release_folio    = iomap_release_folio,
+	.migrate_folio    = filemap_migrate_folio,
 };

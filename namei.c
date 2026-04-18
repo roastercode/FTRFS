@@ -369,11 +369,48 @@ static int ftrfs_unlink(struct inode *dir, struct dentry *dentry)
 
 static int ftrfs_rmdir(struct inode *dir, struct dentry *dentry)
 {
-	struct inode *inode = d_inode(dentry);
-	int           ret;
+	struct inode            *inode = d_inode(dentry);
+	struct ftrfs_inode_info *fi    = FTRFS_I(inode);
+	struct super_block      *sb    = inode->i_sb;
+	struct buffer_head      *bh;
+	struct ftrfs_dir_entry  *de;
+	unsigned long            block_no;
+	unsigned int             offset;
+	int                      i, ret;
 
-	if (inode->i_nlink > 2)
-		return -ENOTEMPTY;
+	/*
+	 * Verify the directory is empty: scan all direct blocks and check
+	 * that no entries other than '.' and '..' exist. Testing i_nlink > 2
+	 * is insufficient — regular files do not increment nlink on the parent,
+	 * so a directory with only files can have nlink == 2 but still be
+	 * non-empty.
+	 */
+	for (i = 0; i < FTRFS_DIRECT_BLOCKS; i++) {
+		block_no = le64_to_cpu(fi->i_direct[i]);
+		if (!block_no)
+			break;
+
+		bh = sb_bread(sb, block_no);
+		if (!bh)
+			return -EIO;
+
+		offset = 0;
+		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
+			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
+			if (!de->d_rec_len)
+				break;
+
+			if (de->d_ino &&
+			    !(de->d_name_len == 1 && de->d_name[0] == '.') &&
+			    !(de->d_name_len == 2 && de->d_name[0] == '.'
+			      && de->d_name[1] == '.')) {
+				brelse(bh);
+				return -ENOTEMPTY;
+			}
+			offset += le16_to_cpu(de->d_rec_len);
+		}
+		brelse(bh);
+	}
 
 	ret = ftrfs_del_dirent(dir, &dentry->d_name);
 	if (ret)

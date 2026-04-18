@@ -2,7 +2,7 @@
  * mkfs.ftrfs — format a block device or image as FTRFS
  * Author: roastercode - Aurelien DESBRIERES <aurelien@hackers.camp>
  *
- * Usage: mkfs.ftrfs <device_or_image>
+ * Usage: mkfs.ftrfs [-N inodes] <device_or_image>
  *
  * Layout:
  *   Block 0    : superblock
@@ -237,12 +237,38 @@ static void write_block(int fd, uint64_t block, const void *buf)
 
 int main(int argc, char *argv[])
 {
-	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <device_or_image>\n", argv[0]);
+	uint64_t inode_table_len = 16; /* default: 16 blocks = 256 inodes */
+	int opt;
+
+	while ((opt = getopt(argc, argv, "N:")) != -1) {
+		switch (opt) {
+		case 'N':
+			{
+				uint64_t n = (uint64_t)atoll(optarg);
+				uint64_t inodes_per_blk = FTRFS_BLOCK_SIZE
+					/ sizeof(struct ftrfs_inode);
+				inode_table_len = (n + inodes_per_blk - 1)
+					/ inodes_per_blk;
+				if (inode_table_len < 1)
+					inode_table_len = 1;
+			}
+			break;
+		default:
+			fprintf(stderr,
+				"Usage: %s [-N inodes] <device_or_image>\n",
+				argv[0]);
+			return 1;
+		}
+	}
+
+	if (optind >= argc) {
+		fprintf(stderr,
+			"Usage: %s [-N inodes] <device_or_image>\n",
+			argv[0]);
 		return 1;
 	}
 
-	int fd = open(argv[1], O_RDWR);
+	int fd = open(argv[optind], O_RDWR);
 	if (fd < 0) { perror("open"); return 1; }
 
 	struct stat st;
@@ -272,7 +298,6 @@ int main(int argc, char *argv[])
 	 * Block 7+     : free data blocks
 	 */
 	uint64_t inode_table_blk = 1;
-	uint64_t inode_table_len = 4;
 	uint64_t bitmap_blk      = inode_table_blk + inode_table_len;
 	uint64_t data_start_blk  = bitmap_blk + 2;
 	uint64_t inodes_per_block = FTRFS_BLOCK_SIZE / sizeof(struct ftrfs_inode);
@@ -355,7 +380,7 @@ int main(int argc, char *argv[])
 	write_block(fd, 0, &sb);
 	close(fd);
 
-	printf("mkfs.ftrfs: formatted %s\n", argv[1]);
+	printf("mkfs.ftrfs: formatted %s\n", argv[optind]);
 	printf("  blocks:  %lu (free: %lu)\n",
 	       (unsigned long)total_blocks,
 	       (unsigned long)sb.s_free_blocks);

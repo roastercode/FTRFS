@@ -31,6 +31,7 @@ static struct inode *ftrfs_alloc_inode(struct super_block *sb)
 	memset(fi->i_direct, 0, sizeof(fi->i_direct));
 	fi->i_indirect  = 0;
 	fi->i_dindirect = 0;
+	fi->i_tindirect = 0;
 	fi->i_flags     = 0;
 
 	return &fi->vfs_inode;
@@ -80,11 +81,26 @@ static void ftrfs_put_super(struct super_block *sb)
 	}
 }
 
+/*
+ * evict_inode — called when inode nlink drops to 0 and last reference released
+ * Frees the inode number back to the bitmap.
+ */
+static void ftrfs_evict_inode(struct inode *inode)
+{
+	truncate_inode_pages_final(&inode->i_data);
+	clear_inode(inode);
+
+	/* Only free the inode number if the file has been truly deleted */
+	if (!inode->i_nlink)
+		ftrfs_free_inode_num(inode->i_sb, (u64)inode->i_ino);
+}
+
 static const struct super_operations ftrfs_super_ops = {
 	.alloc_inode    = ftrfs_alloc_inode,
 	.free_inode     = ftrfs_free_inode,
+	.evict_inode    = ftrfs_evict_inode,
 	.put_super      = ftrfs_put_super,
-		.write_inode    = ftrfs_write_inode,
+	.write_inode    = ftrfs_write_inode,
 	.statfs         = ftrfs_statfs,
 };
 
@@ -109,6 +125,11 @@ void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 
 	spin_lock(&sbi->s_lock);
 
+	/*
+	 * Write directly to the buffer_head backing the on-disk superblock.
+	 * Also update the in-memory copy (sbi->s_ftrfs_sb) to keep them
+	 * consistent, since other paths read from sbi->s_ftrfs_sb.
+	 */
 	fsb  = (struct ftrfs_super_block *)sbi->s_sbh->b_data;
 	head = fsb->s_rs_journal_head % FTRFS_RS_JOURNAL_SIZE;
 	ev   = &fsb->s_rs_journal[head];
@@ -120,6 +141,10 @@ void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 		ftrfs_crc32(ev, offsetof(struct ftrfs_rs_event, re_crc32)));
 
 	fsb->s_rs_journal_head = (head + 1) % FTRFS_RS_JOURNAL_SIZE;
+
+	/* Sync to in-memory copy */
+	sbi->s_ftrfs_sb->s_rs_journal[head] = *ev;
+	sbi->s_ftrfs_sb->s_rs_journal_head  = fsb->s_rs_journal_head;
 
 	mark_buffer_dirty(sbi->s_sbh);
 
@@ -211,7 +236,7 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	if (ftrfs_setup_bitmap(sb)) {
 		ret = -ENOMEM;
-		goto out_free_fsb;
+		goto out_put_root;
 	}
 
 	pr_info("ftrfs: mounted (blocks=%llu free=%lu inodes=%llu)\n",
@@ -221,6 +246,9 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	return 0;
 
+out_put_root:
+	dput(sb->s_root);
+	sb->s_root = NULL;
 out_free_fsb:
 	kfree(sbi->s_ftrfs_sb);
 out_free_sbi:
@@ -274,6 +302,13 @@ static int __init ftrfs_init(void)
 {
 	int ret;
 
+	/* Verify on-disk structure sizes at compile time */
+	BUILD_BUG_ON(sizeof(struct ftrfs_super_block) != FTRFS_BLOCK_SIZE);
+	BUILD_BUG_ON(sizeof(struct ftrfs_inode) != 256);
+
+	/* Initialize GF(2^8) tables for RS FEC — once, before any mount */
+	ftrfs_rs_init_tables();
+
 	ftrfs_inode_cachep = kmem_cache_create(
 		"ftrfs_inode_cache",
 		sizeof(struct ftrfs_inode_info),
@@ -293,8 +328,6 @@ static int __init ftrfs_init(void)
 		return ret;
 	}
 
-	BUILD_BUG_ON(sizeof(struct ftrfs_super_block) != FTRFS_BLOCK_SIZE);
-	BUILD_BUG_ON(sizeof(struct ftrfs_inode) != 256);
 	pr_info("ftrfs: module loaded (FTRFS Fault-Tolerant Radiation-Robust FS)\n");
 	return 0;
 }
@@ -304,6 +337,7 @@ static void __exit ftrfs_exit(void)
 	unregister_filesystem(&ftrfs_fs_type);
 	rcu_barrier();
 	kmem_cache_destroy(ftrfs_inode_cachep);
+	ftrfs_rs_exit_tables();
 	pr_info("ftrfs: module unloaded\n");
 }
 

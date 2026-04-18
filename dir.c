@@ -1,37 +1,64 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * FTRFS — Directory operations
- * Author: roastercode - Aurelien DESBRIERES <aurelien@hackers.camp>
+ * Author: Aurelien DESBRIERES <aurelien@hackers.camp>
  */
-
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
 #include "ftrfs.h"
 
 /*
  * ftrfs_readdir — iterate directory entries
+ *
+ * ctx->pos encoding:
+ *   0, 1       : '.' and '..' (emitted by dir_emit_dots)
+ *   INT_MAX    : EOF
+ *   other      : ((block_idx + 1) << 16) | entry_slot
+ *
+ * This encoding allows correct resumption if getdents() is interrupted
+ * mid-directory. block_idx is 0-based index into i_direct[]; entry_slot
+ * is the entry index within that block.
+ *
+ * Maximum directory size: FTRFS_DIRECT_BLOCKS blocks × (4096 / 268) entries
+ * = 12 × 15 = 180 entries. block_idx fits in 15 bits, entry_slot in 8 bits,
+ * well within the 32-bit pos space.
  */
 static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 {
-	struct inode       *inode = file_inode(file);
-	struct super_block *sb    = inode->i_sb;
-	struct ftrfs_inode_info *fi = FTRFS_I(inode);
-	struct buffer_head *bh;
-	struct ftrfs_dir_entry *de;
-	unsigned long block_idx, block_no;
-	unsigned int  offset;
+	struct inode            *inode = file_inode(file);
+	struct super_block      *sb    = inode->i_sb;
+	struct ftrfs_inode_info *fi    = FTRFS_I(inode);
+	struct buffer_head      *bh;
+	struct ftrfs_dir_entry  *de;
+	unsigned long  block_no;
+	unsigned int   offset;
+	int            block_idx;
+	int            entry_slot;
+	int            start_block;
+	int            start_slot;
 
-	/* EOF guard */
 	if (ctx->pos == INT_MAX)
 		return 0;
-	/* Emit . and .. (ctx->pos: 0=., 1=.., 2+=real entries) */
+
+	/* Emit . and .. */
 	if (ctx->pos < 2) {
 		if (!dir_emit_dots(file, ctx))
 			return 0;
 	}
 
-	/* Iterate over direct blocks only (skeleton: no indirect yet) */
-	for (block_idx = 0; block_idx < FTRFS_DIRECT_BLOCKS; block_idx++) {
+	/*
+	 * Decode resume position. pos == 2 means start from the beginning.
+	 * pos > 2 encodes ((block_idx+1) << 16) | entry_slot from last emit.
+	 */
+	if (ctx->pos <= 2) {
+		start_block = 0;
+		start_slot  = 0;
+	} else {
+		start_block = (int)((ctx->pos >> 16) & 0x7FFF) - 1;
+		start_slot  = (int)(ctx->pos & 0xFFFF);
+	}
+
+	for (block_idx = start_block; block_idx < FTRFS_DIRECT_BLOCKS; block_idx++) {
 		block_no = le64_to_cpu(fi->i_direct[block_idx]);
 		if (!block_no)
 			break;
@@ -40,32 +67,42 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 		if (!bh)
 			continue;
 
-		offset = 0;
-		while (offset < FTRFS_BLOCK_SIZE) {
-			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
+		entry_slot = (block_idx == start_block) ? start_slot : 0;
+		offset = entry_slot * sizeof(struct ftrfs_dir_entry);
 
+		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
+			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
 			if (!de->d_rec_len)
-				break; /* end of dir block */
+				break;
 
 			/* Skip . and .. — emitted by dir_emit_dots */
-			if (de->d_ino && de->d_name_len &&
+			if (de->d_ino &&
 			    !(de->d_name_len == 1 && de->d_name[0] == '.') &&
-			    !(de->d_name_len == 2 && de->d_name[0] == '.' && de->d_name[1] == '.')) {
-				if (!dir_emit(ctx,
-					      de->d_name,
-					      de->d_name_len,
+			    !(de->d_name_len == 2 && de->d_name[0] == '.' &&
+			      de->d_name[1] == '.')) {
+				/*
+				 * Update ctx->pos before dir_emit so the VFS
+				 * has a unique seek offset for each entry.
+				 * Encode as ((block_idx+1) << 16) | entry_slot.
+				 */
+				ctx->pos = ((loff_t)(block_idx + 1) << 16)
+					   | entry_slot;
+				if (!dir_emit(ctx, de->d_name, de->d_name_len,
 					      le64_to_cpu(de->d_ino),
 					      de->d_file_type)) {
 					brelse(bh);
 					return 0;
 				}
-				ctx->pos++;
 			}
 
+			entry_slot++;
 			offset += le16_to_cpu(de->d_rec_len);
 		}
-
 		brelse(bh);
+
+		/* Reset start_slot for subsequent blocks */
+		start_block = block_idx + 1;
+		start_slot  = 0;
 	}
 
 	ctx->pos = INT_MAX;
@@ -76,22 +113,22 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
  * ftrfs_lookup — find dentry in directory
  */
 struct dentry *ftrfs_lookup(struct inode *dir,
-				   struct dentry *dentry,
-				   unsigned int flags)
+			    struct dentry *dentry,
+			    unsigned int flags)
 {
 	struct super_block      *sb = dir->i_sb;
 	struct ftrfs_inode_info *fi = FTRFS_I(dir);
-	struct buffer_head      *bh;
 	struct ftrfs_dir_entry  *de;
-	struct inode            *inode = NULL;
-	unsigned long            block_idx, block_no;
-	unsigned int             offset;
+	struct buffer_head      *bh;
+	unsigned int  offset;
+	unsigned long block_no;
+	int i;
 
 	if (dentry->d_name.len > FTRFS_MAX_FILENAME)
 		return ERR_PTR(-ENAMETOOLONG);
 
-	for (block_idx = 0; block_idx < FTRFS_DIRECT_BLOCKS; block_idx++) {
-		block_no = le64_to_cpu(fi->i_direct[block_idx]);
+	for (i = 0; i < FTRFS_DIRECT_BLOCKS; i++) {
+		block_no = le64_to_cpu(fi->i_direct[i]);
 		if (!block_no)
 			break;
 
@@ -100,36 +137,32 @@ struct dentry *ftrfs_lookup(struct inode *dir,
 			continue;
 
 		offset = 0;
-		while (offset < FTRFS_BLOCK_SIZE) {
+		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
-
-			if (!de->d_rec_len)
-				break; /* end of dir block */
-
+			if (!de->d_rec_len) {
+				offset += sizeof(*de);
+				continue;
+			}
 			if (de->d_ino &&
 			    de->d_name_len == dentry->d_name.len &&
 			    !memcmp(de->d_name, dentry->d_name.name,
-				    de->d_name_len)) {
-				unsigned long ino = le64_to_cpu(de->d_ino);
+				    dentry->d_name.len)) {
+				u64 ino = le64_to_cpu(de->d_ino);
+				struct inode *inode;
 
 				brelse(bh);
 				inode = ftrfs_iget(sb, ino);
-				goto found;
+				return d_splice_alias(inode, dentry);
 			}
-
 			offset += le16_to_cpu(de->d_rec_len);
 		}
 		brelse(bh);
 	}
-
-found:
-	return d_splice_alias(inode, dentry);
+	return d_splice_alias(NULL, dentry);
 }
 
 const struct file_operations ftrfs_dir_operations = {
-	.llseek  = generic_file_llseek,
-	.read    = generic_read_dir,
+	.llseek         = generic_file_llseek,
+	.read           = generic_read_dir,
 	.iterate_shared = ftrfs_readdir,
 };
-
-
