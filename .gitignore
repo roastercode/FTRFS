@@ -20,3 +20,4 @@ block.c
 Module.symvers
 modules.order
 block.c
+CONTEXT*.md
