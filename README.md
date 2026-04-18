@@ -61,6 +61,8 @@ before v4 resubmission.
 | On-disk bitmap block with RS FEC (v2)        | ✅ implemented |
 | mkfs parity matches lib/reed_solomon         | ✅ validated   |
 | mkfs -N <inodes> option                      | ✅ implemented |
+| Single indirect block (~2 MiB per file)      | ✅ implemented |
+| Data block free on delete (evict_inode)      | ✅ implemented |
 | inode bitmap consistency at remount          | ✅ fixed       |
 | evict_inode: zero i_mode on disk             | ✅ fixed       |
 | ftrfs_reconfigure() for remount support      | ✅ fixed       |
@@ -69,10 +71,10 @@ before v4 resubmission.
 | checkpatch.pl --strict: 0 issues             | ✅ validated   |
 | arm64 KVM, kernel 7.0, 0 BUG/WARN           | ✅ validated   |
 | Slurm HPC cluster validation (4 nodes)       | ✅ validated   |
-| xfstests generic/002, generic/257            | ✅ PASS        |
-| xfstests generic/001, 010, 098               | 🔧 blocked on indirect blocks |
+| xfstests generic/002, 010, 098, 257          | ✅ PASS        |
+| xfstests generic/001                         | needs >2 GiB test image |
 | kthread scrubber (RT priority)               | 🔧 planned     |
-| Indirect block support                       | 🔧 planned     |
+| Double/triple indirect blocks                | 🔧 planned     |
 
 ---
 
@@ -86,52 +88,27 @@ Block N+2      root directory data
 Block N+3..end data blocks
 ```
 
-The bitmap block stores the free-block allocation state in 16 subblocks
-of 239 data bytes each, followed by 16 bytes of Reed-Solomon parity.
-At mount time, the kernel decodes each subblock and corrects SEU-induced
-errors in place. No existing Linux filesystem applies RS FEC to its own
-allocation metadata.
+Default: `mkfs.ftrfs -N 256` → 16 inode table blocks, bitmap at block 17,
+data start at block 19.
 
-See [Documentation/design.md](Documentation/design.md) for the complete
-on-disk format specification.
-
----
-
-## System Architecture
-
-FTRFS is designed as a **data partition** filesystem within a complete
-hardened embedded Linux storage stack:
-
-```
-/boot      ext4 or squashfs (read-only)
-/          squashfs + dm-verity (read-only)
-           SEU on rootfs → I/O error, reboot from verified image
-/data      FTRFS (read-write)
-           SEU on data → in-place RS correction, event logged
-/var/log   FTRFS (read-write)
-```
-
-See [Documentation/system-architecture.md](Documentation/system-architecture.md)
-for a detailed comparison with VxWorks HRFS, PikeOS, and dm-verity.
+File addressing:
+- 12 direct blocks = 48 KiB
+- 1 single indirect block = 512 × 4 KiB = 2 MiB
+- Total per file: ~2 MiB (v1)
 
 ---
 
-## Reed-Solomon Implementation
+## xfstests Results (2026-04-18, arm64 kernel 7.0)
 
-FTRFS uses the kernel's `lib/reed_solomon` library (`encode_rs8`, `decode_rs8`).
-No custom Galois Field arithmetic is implemented in the kernel module.
-The codec is initialized once at module load:
+| Test | Result | Notes |
+|------|--------|-------|
+| generic/002 | ✅ PASS | file create/delete |
+| generic/010 | ✅ PASS | dbm — needs indirect blocks |
+| generic/098 | ✅ PASS | pwrite at offset > 48 KiB |
+| generic/257 | ✅ PASS | directory d_off uniqueness |
+| generic/001 | env limit | needs >2 GiB test image (not a FTRFS bug) |
 
-```c
-init_rs(8, 0x187, 0, 1, 16)
-// GF(2^8), primitive polynomial 0x187
-// fcr=0: roots alpha^0..alpha^15
-// 16 parity bytes per 239-byte subblock
-// Corrects up to 8 symbol errors per subblock
-```
-
-`mkfs.ftrfs` reproduces the same GF arithmetic and generator polynomial
-exactly, verified byte-for-byte against the kernel output.
+Zero BUG/WARN/Oops/inconsistency in dmesg across all tests.
 
 ---
 
@@ -154,18 +131,19 @@ Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
 ---
 
-## xfstests Results (2026-04-18, arm64 kernel 7.0)
+## Reed-Solomon Implementation
 
-| Test | Result | Notes |
-|------|--------|-------|
-| generic/002 | ✅ PASS | file create/delete |
-| generic/257 | ✅ PASS | directory d_off uniqueness |
-| generic/001 | FAIL | writes > 48 KiB — no indirect blocks yet |
-| generic/010 | FAIL | dbm requires files > 48 KiB |
-| generic/098 | FAIL | pwrite at offset > 48 KiB |
+FTRFS uses the kernel's `lib/reed_solomon` library (`encode_rs8`, `decode_rs8`).
+No custom Galois Field arithmetic is implemented in the kernel module.
+The codec is initialized once at module load:
 
-Zero BUG/WARN/Oops/inconsistency in dmesg across all tests.
-Remaining failures blocked on indirect block support (planned for v4).
+```c
+init_rs(8, 0x187, 0, 1, 16)
+// GF(2^8), primitive polynomial 0x187
+// fcr=0: roots alpha^0..alpha^15
+// 16 parity bytes per 239-byte subblock
+// Corrects up to 8 symbol errors per subblock
+```
 
 ---
 
@@ -207,32 +185,6 @@ sudo mount -t ftrfs test.img /mnt
 
 ---
 
-## Source Layout
-
-```
-ftrfs/
-├── Kconfig           kernel configuration (selects REED_SOLOMON)
-├── Makefile          build system
-├── ftrfs.h           on-disk and in-memory structures
-├── super.c           superblock, mount/umount, reconfigure, RS journal
-├── inode.c           inode read, CRC32 + RS FEC verification
-├── dir.c             directory operations (readdir, lookup)
-├── file.c            file operations, iomap IO path, migrate_folio
-├── namei.c           create, mkdir, unlink, rmdir, link, rename
-├── alloc.c           block/inode bitmap allocator + on-disk RS FEC bitmap
-├── edac.c            CRC32, RS FEC via lib/reed_solomon
-├── mkfs.ftrfs.c      userspace formatter (RS parity matches kernel, -N option)
-├── Documentation/
-│   ├── design.md             on-disk format specification (v2)
-│   ├── system-architecture.md  positioning, stack design, comparison
-│   ├── testing.md            test procedure and results
-│   ├── roadmap.md            what is done, what remains
-│   └── FTRFS-ACTION-PLAN.md  consolidated action plan
-└── COPYING           GNU General Public License v2
-```
-
----
-
 ## RFC Thread
 
 RFC v3 submitted to linux-fsdevel, April 14, 2026.
@@ -242,7 +194,7 @@ Active reviewers: Matthew Wilcox, Pedro Falcato, Darrick J. Wong,
 Andreas Dilger, Eric Biggers, Gao Xiang.
 
 Status: incorporating review feedback. Next submission (v4) planned after
-indirect block support and xfstests coverage.
+indirect block support (done), xfstests coverage, and Eric Biggers response.
 
 ---
 
