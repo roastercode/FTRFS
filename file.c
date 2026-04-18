@@ -7,6 +7,7 @@
 #include <linux/mm.h>
 #include <linux/iomap.h>
 #include <linux/pagemap.h>
+#include <linux/buffer_head.h>
 #include "ftrfs.h"
 
 /* Forward declaration — defined after iomap_ops */
@@ -26,9 +27,17 @@ const struct inode_operations ftrfs_file_inode_operations = {
 };
 
 /*
- * ftrfs_iomap_begin — map a file range to disk blocks for iomap.
+ * FTRFS_INDIRECT_PTRS: number of block pointers per indirect block.
+ * Each pointer is a u64 (8 bytes), so 4096 / 8 = 512 entries.
+ * Single indirect capacity: 512 blocks = 2 MiB.
+ */
+#define FTRFS_INDIRECT_PTRS (FTRFS_BLOCK_SIZE / sizeof(__le64))
+
+/*
+ * ftrfs_iomap_begin -- map a file range to disk blocks for iomap.
  * Handles read (no allocation) and write (allocate on demand).
- * Only direct blocks supported (max 48 KiB per file).
+ * Supports direct blocks (iblock 0..11) and single indirect
+ * (iblock 12..523, covering up to ~2 MiB per file).
  */
 static int ftrfs_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 			     unsigned int flags, struct iomap *iomap,
@@ -40,43 +49,104 @@ static int ftrfs_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 	u64  new_block;
 	u64  phys;
 
-	if (iblock >= FTRFS_DIRECT_BLOCKS) {
-		pr_err_ratelimited("ftrfs: iomap: offset beyond direct blocks\n");
-		return -EOPNOTSUPP;
-	}
-
 	iomap->offset = iblock << FTRFS_BLOCK_SHIFT;
 	iomap->length = FTRFS_BLOCK_SIZE;
 	iomap->bdev   = sb->s_bdev;
 	iomap->flags  = 0;
 
-	phys = le64_to_cpu(fi->i_direct[iblock]);
-	if (phys) {
+	if (iblock < FTRFS_DIRECT_BLOCKS) {
+		/* --- Direct block --- */
+		phys = le64_to_cpu(fi->i_direct[iblock]);
+		if (phys) {
+			iomap->type = IOMAP_MAPPED;
+			iomap->addr = phys << FTRFS_BLOCK_SHIFT;
+			return 0;
+		}
+		if (!(flags & IOMAP_WRITE)) {
+			iomap->type = IOMAP_HOLE;
+			iomap->addr = IOMAP_NULL_ADDR;
+			return 0;
+		}
+		new_block = ftrfs_alloc_block(sb);
+		if (!new_block) {
+			pr_err("ftrfs: iomap: no free blocks\n");
+			return -ENOSPC;
+		}
+		fi->i_direct[iblock] = cpu_to_le64(new_block);
+		mark_inode_dirty(inode);
 		iomap->type = IOMAP_MAPPED;
-		iomap->addr = phys << FTRFS_BLOCK_SHIFT;
+		iomap->addr = new_block << FTRFS_BLOCK_SHIFT;
 		return 0;
 	}
 
-	/* Hole on read — do not allocate */
-	if (!(flags & IOMAP_WRITE)) {
-		iomap->type = IOMAP_HOLE;
-		iomap->addr = IOMAP_NULL_ADDR;
+	if (iblock < FTRFS_DIRECT_BLOCKS + FTRFS_INDIRECT_PTRS) {
+		/* --- Single indirect block --- */
+		u64 indirect_slot = iblock - FTRFS_DIRECT_BLOCKS;
+		u64 indirect_blk  = le64_to_cpu(fi->i_indirect);
+		struct buffer_head *ibh;
+		__le64 *ptrs;
+
+		if (!indirect_blk) {
+			if (!(flags & IOMAP_WRITE)) {
+				iomap->type = IOMAP_HOLE;
+				iomap->addr = IOMAP_NULL_ADDR;
+				return 0;
+			}
+			indirect_blk = ftrfs_alloc_block(sb);
+			if (!indirect_blk) {
+				pr_err("ftrfs: iomap: no free blocks for indirect\n");
+				return -ENOSPC;
+			}
+			ibh = sb_getblk(sb, indirect_blk);
+			if (!ibh) {
+				ftrfs_free_block(sb, indirect_blk);
+				return -EIO;
+			}
+			lock_buffer(ibh);
+			memset(ibh->b_data, 0, FTRFS_BLOCK_SIZE);
+			set_buffer_uptodate(ibh);
+			unlock_buffer(ibh);
+			mark_buffer_dirty(ibh);
+			brelse(ibh);
+			fi->i_indirect = cpu_to_le64(indirect_blk);
+			mark_inode_dirty(inode);
+		}
+
+		ibh = sb_bread(sb, indirect_blk);
+		if (!ibh)
+			return -EIO;
+		ptrs = (__le64 *)ibh->b_data;
+		phys = le64_to_cpu(ptrs[indirect_slot]);
+
+		if (phys) {
+			brelse(ibh);
+			iomap->type = IOMAP_MAPPED;
+			iomap->addr = phys << FTRFS_BLOCK_SHIFT;
+			return 0;
+		}
+		if (!(flags & IOMAP_WRITE)) {
+			brelse(ibh);
+			iomap->type = IOMAP_HOLE;
+			iomap->addr = IOMAP_NULL_ADDR;
+			return 0;
+		}
+		new_block = ftrfs_alloc_block(sb);
+		if (!new_block) {
+			brelse(ibh);
+			pr_err("ftrfs: iomap: no free blocks\n");
+			return -ENOSPC;
+		}
+		ptrs[indirect_slot] = cpu_to_le64(new_block);
+		mark_buffer_dirty(ibh);
+		brelse(ibh);
+		iomap->type = IOMAP_MAPPED;
+		iomap->addr = new_block << FTRFS_BLOCK_SHIFT;
 		return 0;
 	}
 
-	/* Allocate a new block for write */
-	new_block = ftrfs_alloc_block(sb);
-	if (!new_block) {
-		pr_err("ftrfs: iomap: no free blocks\n");
-		return -ENOSPC;
-	}
-
-	fi->i_direct[iblock] = cpu_to_le64(new_block);
-	mark_inode_dirty(inode);
-
-	iomap->type = IOMAP_MAPPED;
-	iomap->addr = new_block << FTRFS_BLOCK_SHIFT;
-	return 0;
+	/* Beyond single indirect: not supported in v1 */
+	pr_err_ratelimited("ftrfs: iomap: offset beyond indirect blocks\n");
+	return -EOPNOTSUPP;
 }
 
 static int ftrfs_iomap_end(struct inode *inode, loff_t pos, loff_t length,

@@ -85,14 +85,67 @@ static void ftrfs_put_super(struct super_block *sb)
  * evict_inode — called when inode nlink drops to 0 and last reference released
  * Frees the inode number back to the bitmap.
  */
+/*
+ * ftrfs_free_data_blocks -- release all data blocks of a deleted inode.
+ *
+ * Frees direct blocks and the single indirect block (and all blocks
+ * it points to). Called from evict_inode when nlink drops to 0.
+ */
+static void ftrfs_free_data_blocks(struct inode *inode)
+{
+	struct ftrfs_inode_info *fi = FTRFS_I(inode);
+	struct super_block      *sb = inode->i_sb;
+	int i;
+
+	/* Free direct blocks */
+	for (i = 0; i < FTRFS_DIRECT_BLOCKS; i++) {
+		u64 blk = le64_to_cpu(fi->i_direct[i]);
+
+		if (blk) {
+			ftrfs_free_block(sb, blk);
+			fi->i_direct[i] = 0;
+		}
+	}
+
+	/* Free single indirect block and all blocks it points to */
+	if (fi->i_indirect) {
+		u64 indirect_blk = le64_to_cpu(fi->i_indirect);
+		struct buffer_head *ibh = sb_bread(sb, indirect_blk);
+
+		if (ibh) {
+			__le64 *ptrs = (__le64 *)ibh->b_data;
+			u64 nptrs = FTRFS_BLOCK_SIZE / sizeof(__le64);
+			u64 j;
+
+			for (j = 0; j < nptrs; j++) {
+				u64 blk = le64_to_cpu(ptrs[j]);
+
+				if (blk)
+					ftrfs_free_block(sb, blk);
+			}
+			brelse(ibh);
+		}
+		ftrfs_free_block(sb, indirect_blk);
+		fi->i_indirect = 0;
+	}
+}
+
 static void ftrfs_evict_inode(struct inode *inode)
 {
 	truncate_inode_pages_final(&inode->i_data);
-	clear_inode(inode);
-
-	/* Only free the inode number if the file has been truly deleted */
-	if (!inode->i_nlink)
+	/*
+	 * If the file is truly deleted (nlink == 0), free all data blocks,
+	 * zero i_mode on disk so the inode table scan at next mount
+	 * correctly identifies this slot as free, then release the inode
+	 * number back to the bitmap.
+	 */
+	if (!inode->i_nlink) {
+		ftrfs_free_data_blocks(inode);
+		inode->i_mode = 0;
+		ftrfs_write_inode_raw(inode);
 		ftrfs_free_inode_num(inode->i_sb, (u64)inode->i_ino);
+	}
+	clear_inode(inode);
 }
 
 static const struct super_operations ftrfs_super_ops = {
@@ -137,8 +190,12 @@ void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 	ev->re_block_no   = cpu_to_le64(block_no);
 	ev->re_timestamp  = cpu_to_le64(ktime_get_ns());
 	ev->re_error_bits = cpu_to_le32(err_bits);
-	ev->re_crc32      = cpu_to_le32(
-		ftrfs_crc32(ev, offsetof(struct ftrfs_rs_event, re_crc32)));
+	{
+		u32 ev_crc = ftrfs_crc32(ev,
+					  offsetof(struct ftrfs_rs_event,
+						   re_crc32));
+		ev->re_crc32 = cpu_to_le32(ev_crc);
+	}
 
 	fsb->s_rs_journal_head = (head + 1) % FTRFS_RS_JOURNAL_SIZE;
 
@@ -189,7 +246,7 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	}
 
 	/* Verify CRC32 of superblock (excluding the crc32 field itself) */
-	crc = ftrfs_crc32(fsb, offsetof(struct ftrfs_super_block, s_crc32));
+	crc = ftrfs_crc32_sb(fsb);
 	if (crc != le32_to_cpu(fsb->s_crc32)) {
 		errorf(fc, "ftrfs: superblock CRC32 mismatch (got 0x%08x, expected 0x%08x)",
 		       crc, le32_to_cpu(fsb->s_crc32));
@@ -267,8 +324,21 @@ static int ftrfs_get_tree(struct fs_context *fc)
 	return get_tree_bdev(fc, ftrfs_fill_super);
 }
 
+/*
+ * ftrfs_reconfigure — handle mount -o remount
+ *
+ * xfstests calls remount,ro after each test to verify filesystem
+ * integrity. FTRFS accepts the reconfigure request without
+ * taking any action — ro/rw transitions are handled by the VFS.
+ */
+static int ftrfs_reconfigure(struct fs_context *fc)
+{
+	return 0;
+}
+
 static const struct fs_context_operations ftrfs_context_ops = {
-	.get_tree = ftrfs_get_tree,
+	.get_tree   = ftrfs_get_tree,
+	.reconfigure = ftrfs_reconfigure,
 };
 
 static int ftrfs_init_fs_context(struct fs_context *fc)
@@ -309,12 +379,12 @@ static int __init ftrfs_init(void)
 	/* Initialize GF(2^8) tables for RS FEC — once, before any mount */
 	ftrfs_rs_init_tables();
 
-	ftrfs_inode_cachep = kmem_cache_create(
-		"ftrfs_inode_cache",
-		sizeof(struct ftrfs_inode_info),
-		0,
-		SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT,
-		ftrfs_inode_init_once);
+	ftrfs_inode_cachep =
+		kmem_cache_create("ftrfs_inode_cache",
+				  sizeof(struct ftrfs_inode_info),
+				  0,
+				  SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT,
+				  ftrfs_inode_init_once);
 
 	if (!ftrfs_inode_cachep) {
 		pr_err("ftrfs: failed to create inode cache\n");
@@ -345,7 +415,8 @@ module_init(ftrfs_init);
 module_exit(ftrfs_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("roastercode - Aurelien DESBRIERES <aurelien@hackers.camp>");
+MODULE_AUTHOR("Aurelien DESBRIERES <aurelien@hackers.camp>");
 MODULE_DESCRIPTION("FTRFS: Fault-Tolerant Radiation-Robust Filesystem");
 MODULE_VERSION("0.1.0");
 MODULE_ALIAS_FS("ftrfs");
+MODULE_SOFTDEP("pre: reed_solomon");
