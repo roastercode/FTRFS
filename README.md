@@ -43,9 +43,9 @@ FTRFS is designed to stay under 5000 lines of auditable code.
 
 ## Current Status
 
-This is an out-of-tree module, actively maintained and validated on arm64
-kernel 7.0. It has been submitted as an RFC to linux-fsdevel (April 2026)
-and is currently incorporating review feedback before a future resubmission.
+Out-of-tree module, actively maintained and validated on arm64 kernel 7.0.
+RFC v3 submitted to linux-fsdevel (April 2026), incorporating review feedback
+before v4 resubmission.
 
 | Feature                                      | Status         |
 |----------------------------------------------|----------------|
@@ -59,12 +59,19 @@ and is currently incorporating review feedback before a future resubmission.
 | Radiation Event Journal                      | ✅ implemented |
 | rename (same-dir and cross-dir)              | ✅ implemented |
 | On-disk bitmap block with RS FEC (v2)        | ✅ implemented |
-| mkfs.ftrfs parity matches lib/reed_solomon   | ✅ validated   |
+| mkfs parity matches lib/reed_solomon         | ✅ validated   |
+| mkfs -N <inodes> option                      | ✅ implemented |
+| inode bitmap consistency at remount          | ✅ fixed       |
+| evict_inode: zero i_mode on disk             | ✅ fixed       |
+| ftrfs_reconfigure() for remount support      | ✅ fixed       |
+| migrate_folio in ftrfs_aops                  | ✅ fixed       |
+| readdir d_off unique per entry               | ✅ fixed       |
 | checkpatch.pl --strict: 0 issues             | ✅ validated   |
 | arm64 KVM, kernel 7.0, 0 BUG/WARN           | ✅ validated   |
 | Slurm HPC cluster validation (4 nodes)       | ✅ validated   |
+| xfstests generic/002, generic/257            | ✅ PASS        |
+| xfstests generic/001, 010, 098               | 🔧 blocked on indirect blocks |
 | kthread scrubber (RT priority)               | 🔧 planned     |
-| xfstests recipe (Yocto)                      | 🔧 planned     |
 | Indirect block support                       | 🔧 planned     |
 
 ---
@@ -73,7 +80,7 @@ and is currently incorporating review feedback before a future resubmission.
 
 ```
 Block 0        superblock (magic 0x46545246, 4096 bytes, CRC32 verified)
-Block 1..N     inode table (256 bytes/inode)
+Block 1..N     inode table (256 bytes/inode, configurable via mkfs -N)
 Block N+1      bitmap block (RS FEC protected — 16 subblocks RS(255,239))
 Block N+2      root directory data
 Block N+3..end data blocks
@@ -147,6 +154,21 @@ Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
 ---
 
+## xfstests Results (2026-04-18, arm64 kernel 7.0)
+
+| Test | Result | Notes |
+|------|--------|-------|
+| generic/002 | ✅ PASS | file create/delete |
+| generic/257 | ✅ PASS | directory d_off uniqueness |
+| generic/001 | FAIL | writes > 48 KiB — no indirect blocks yet |
+| generic/010 | FAIL | dbm requires files > 48 KiB |
+| generic/098 | FAIL | pwrite at offset > 48 KiB |
+
+Zero BUG/WARN/Oops/inconsistency in dmesg across all tests.
+Remaining failures blocked on indirect block support (planned for v4).
+
+---
+
 ## Requirements
 
 - Linux kernel 7.0 or later
@@ -178,7 +200,7 @@ bitbake mkfs-ftrfs
 ```sh
 gcc -o mkfs.ftrfs mkfs.ftrfs.c
 dd if=/dev/zero of=test.img bs=4096 count=16384
-./mkfs.ftrfs test.img
+./mkfs.ftrfs -N 256 test.img
 sudo insmod ftrfs.ko
 sudo mount -t ftrfs test.img /mnt
 ```
@@ -192,20 +214,20 @@ ftrfs/
 ├── Kconfig           kernel configuration (selects REED_SOLOMON)
 ├── Makefile          build system
 ├── ftrfs.h           on-disk and in-memory structures
-├── super.c           superblock, mount/umount, Radiation Event Journal
+├── super.c           superblock, mount/umount, reconfigure, RS journal
 ├── inode.c           inode read, CRC32 + RS FEC verification
 ├── dir.c             directory operations (readdir, lookup)
-├── file.c            file operations, iomap IO path
+├── file.c            file operations, iomap IO path, migrate_folio
 ├── namei.c           create, mkdir, unlink, rmdir, link, rename
 ├── alloc.c           block/inode bitmap allocator + on-disk RS FEC bitmap
 ├── edac.c            CRC32, RS FEC via lib/reed_solomon
-├── mkfs.ftrfs.c      userspace formatter (RS parity matches kernel exactly)
+├── mkfs.ftrfs.c      userspace formatter (RS parity matches kernel, -N option)
 ├── Documentation/
 │   ├── design.md             on-disk format specification (v2)
 │   ├── system-architecture.md  positioning, stack design, comparison
 │   ├── testing.md            test procedure and results
 │   ├── roadmap.md            what is done, what remains
-│   └── RAF.md                consolidated action plan
+│   └── FTRFS-ACTION-PLAN.md  consolidated action plan
 └── COPYING           GNU General Public License v2
 ```
 
@@ -220,7 +242,7 @@ Active reviewers: Matthew Wilcox, Pedro Falcato, Darrick J. Wong,
 Andreas Dilger, Eric Biggers, Gao Xiang.
 
 Status: incorporating review feedback. Next submission (v4) planned after
-xfstests integration and indirect block support.
+indirect block support and xfstests coverage.
 
 ---
 
