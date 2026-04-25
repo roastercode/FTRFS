@@ -1,10 +1,13 @@
 # FTRFS — Fault-Tolerant Radiation-Robust Filesystem
 
 FTRFS is a Linux kernel filesystem designed for dependable storage in
-radiation-intensive environments. It provides per-block CRC32 checksumming
-and Reed-Solomon forward error correction (FEC) using the kernel's
-`lib/reed_solomon` library, targeting embedded Linux systems on single-device
-storage (MRAM, NOR flash) where no external redundancy is available.
+radiation-intensive environments. It provides CRC32 integrity checks on
+metadata (superblock, inodes, Radiation Event Journal) and Reed-Solomon
+forward error correction on the on-disk allocation bitmap via the kernel's
+`lib/reed_solomon` library. The design targets embedded Linux systems on
+single-device storage (MRAM, NOR flash) where no external redundancy is
+available. Extending RS FEC to data blocks at writeback is on the roadmap
+(see `Documentation/roadmap.md`, priority 3).
 
 This implementation is an independent open-source realization of the design
 described in:
@@ -29,9 +32,13 @@ environment, a single-event upset (SEU) silently flips bits in data at rest.
 ext4 checksums detect this corruption but cannot correct it. There is no
 redundant copy to fall back to.
 
-FTRFS integrates Reed-Solomon FEC at the filesystem block level so that
-corrupted data can be corrected in place, on a single device, without
-operator intervention.
+FTRFS integrates Reed-Solomon FEC at the filesystem block level. In the
+current implementation, RS FEC protects the on-disk allocation bitmap
+so that a corrupted bitmap is corrected in place at mount time without
+operator intervention. Extending the same mechanism to data blocks at
+writeback is the next step on the roadmap; today, data block corruption
+would be detected only when RS FEC writeback is enabled in a future
+release.
 
 A secondary constraint is code auditability. Standards such as DO-178C
 (avionics), ECSS-E-ST-40C (space), and IEC 61508 (nuclear/industrial) require
@@ -127,6 +134,11 @@ Cluster: 1 master + 3 compute nodes, each with FTRFS on `/data`.
 | FTRFS write from Slurm job       | ✅       |
 | 0 BUG/WARN/Oops                  | ✅       |
 
+Re-validated 2026-04-25 — same configuration, FTRFS module loads cleanly,
+mkfs/mount/write/read operate as expected on all 4 nodes, zero RS errors,
+zero BUG/WARN/Oops in dmesg. Functional behavior consistent with the
+reference run.
+
 Yocto layer: https://github.com/roastercode/yocto-hardened/tree/arm64-ftrfs
 
 ---
@@ -187,11 +199,16 @@ sudo mount -t ftrfs test.img /mnt
 
 ## RFC Thread
 
-RFC v3 submitted to linux-fsdevel, April 14, 2026.
-Message-ID: `<20260414120726.5713-1-aurelien@hackers.camp>`
+Submitted to `linux-fsdevel@vger.kernel.org`:
 
-Active reviewers: Matthew Wilcox, Pedro Falcato, Darrick J. Wong,
-Andreas Dilger, Eric Biggers, Gao Xiang.
+| Version | Date | Lore archive |
+|---------|------|--------------|
+| RFC v1 | 2026-04-13 | https://lore.kernel.org/linux-fsdevel/20260413142357.515792-1-aurelien@hackers.camp/ |
+| RFC v2 | 2026-04-13 | https://lore.kernel.org/linux-fsdevel/20260413230601.525400-1-aurelien@hackers.camp/ |
+| RFC v3 | 2026-04-14 | https://lore.kernel.org/linux-fsdevel/20260414120726.5713-1-aurelien@hackers.camp/ |
+
+Reviewers who responded publicly: Matthew Wilcox, Pedro Falcato,
+Darrick J. Wong, Andreas Dilger, Eric Biggers, Gao Xiang.
 
 Status: incorporating review feedback. Next submission (v4) planned after
 indirect block support (done), xfstests coverage, and Eric Biggers response.
@@ -208,6 +225,29 @@ tested, and debugged every patch on real hardware.
 Commit attribution: `Assisted-by: Claude:claude-sonnet-4-6`
 
 ---
+
+## Press & community coverage
+
+- Phoronix — *FTRFS: New Fault-Tolerant File-System Proposed For Linux* (2026-04-13):
+  https://www.phoronix.com/news/FTRFS-Linux-File-System
+- Phoronix — *Linux 7.1 Staging* (FTRFS mention):
+  https://www.phoronix.com/news/Linux-7.1-Staging
+- LWN.net — *ftrfs: Fault-Tolerant Radiation-Robust Filesystem*:
+  https://lwn.net/Articles/1067452/
+- daily.dev:
+  https://app.daily.dev/posts/ftrfs-new-fault-tolerant-file-system-proposed-for-linux-m5rbha19y
+- Reddit r/filesystems:
+  https://www.reddit.com/r/filesystems/comments/1skjj18/
+- Reddit r/phoronix_com:
+  https://www.reddit.com/r/phoronix_com/comments/1skbg7q/
+- X/Twitter @phoronix:
+  https://x.com/phoronix/status/2043678672775754091
+- X/Twitter @jreuben1:
+  https://x.com/jreuben1/status/2043912800376889429
+- Telegram Linuxgram (2026-04-13):
+  https://t.me/s/linuxgram?before=18454
+- YouTube — Genai Linux News:
+  https://www.youtube.com/watch?v=EKA93IBcCvk
 
 ## License
 
