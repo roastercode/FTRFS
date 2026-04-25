@@ -247,6 +247,24 @@ affect upstream readiness for `meta-openembedded` submission:
   external reviewers to reproduce results without a multi-page
   setup procedure.
 
+### 6.6 Commit signing policy
+
+GPG commit signing is operational on the maintainer's development
+host. Earlier sessions worked around a broken `pinentry-gnome3`
+under Sway by passing `--no-gpg-sign` on every `git commit`. That
+workaround is retired: `pinentry-curses` is now the active pinentry
+binary (`/etc/eselect/pinentry`), explicitly declared in
+`~/.gnupg/gpg-agent.conf`, and `GPG_TTY` is exported at login.
+
+Policy from this point forward: every maintainer commit is signed
+with GPG key `319A8EAA89C7538AA9550E8BC35EE212519E4857`. Tags are
+annotated and may be additionally signed when the cryptographic
+attestation toolchain (planned: Sigstore) is in place.
+
+Commits made before this policy change carry no signature; they
+remain valid and are not retroactively rewritten. The transition
+point is the first signed commit on `main`.
+
 ## 7. Document maintenance
 
 This document is reviewed at each release tag. The review consists
