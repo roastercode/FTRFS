@@ -8,6 +8,8 @@ config FTRFS_FS
 	depends on BLOCK
 	select CRC32
 	select REED_SOLOMON
+	select REED_SOLOMON_ENC8
+	select REED_SOLOMON_DEC8
 	help
 	  FTRFS is a POSIX-compatible filesystem designed for dependable
 	  storage in radiation-intensive environments. It provides:
