@@ -210,5 +210,6 @@ struct dentry *ftrfs_lookup(struct inode *dir, struct dentry *dentry,
 
 /* namei.c */
 int ftrfs_write_inode(struct inode *inode, struct writeback_control *wbc);
+int ftrfs_write_inode_raw(struct inode *inode);
 
 #endif /* _FTRFS_H */

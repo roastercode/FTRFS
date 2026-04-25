@@ -16,7 +16,7 @@
 /* Helper: write a raw ftrfs_inode to disk                             */
 /* ------------------------------------------------------------------ */
 
-static int ftrfs_write_inode_raw(struct inode *inode)
+int ftrfs_write_inode_raw(struct inode *inode)
 {
 	struct super_block      *sb  = inode->i_sb;
 	struct ftrfs_sb_info    *sbi = FTRFS_SB(sb);
