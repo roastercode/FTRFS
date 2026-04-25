@@ -4,7 +4,7 @@
 codebase (HEAD at the time of this document's last revision).
 **Audience**: downstream integrators, kernel reviewers, future
 contributors, certification auditors.
-**Last updated**: 2026-04-25.
+**Last updated**: 2026-04-26.
 
 ---
 
@@ -118,6 +118,55 @@ needed for the entropy estimate (constraint 6.4).
 
 This finding is recorded here for the first time; it was identified
 during the architectural review that produced `threat-model.md`.
+
+### 3.6 ftrfs_crc32_sb declared but undefined (RESOLVED 2026-04-26)
+
+From commit fd371f3 through commit b60ac1b (the v0.1.0-baseline tag),
+ftrfs.h declared the function `ftrfs_crc32_sb` and `super.c` called
+it from `ftrfs_fill_super` to verify the on-disk superblock CRC32,
+but no definition was ever committed. Out-of-tree builds against a
+properly configured kernel module build environment failed at the
+final link stage with an unresolved symbol error.
+
+The bug went unnoticed because the host development workstation runs
+a kernel whose ftrfs.h dependencies prevent any out-of-tree build,
+and because the runtime test path on Yocto historically used a .ko
+built from a workspace where the function existed locally without
+ever being committed.
+
+Resolved in commit cdfe78b: the function is now defined in `edac.c`
+with coverage matching `mkfs.ftrfs.c::crc32_sb` byte-for-byte. A
+follow-up commit (4ca1859) extended the coverage to the v3 layout.
+
+Implication for `v0.1.0-baseline`: the tag points to a tree where
+this build error is present. The Sigstore signature on the tarball
+remains cryptographically valid; the affected behaviour is the
+ability to build the module out-of-tree from that tag, not the
+contents of the artefact.
+
+### 3.7 lib/reed_solomon API call signature mismatch (RESOLVED 2026-04-26)
+
+`ftrfs_rs_encode` and `ftrfs_rs_decode` in `edac.c` were calling
+`encode_rs8` and `decode_rs8` with a `uint16_t syms[]` buffer.
+The kernel API at `include/linux/rslib.h` takes `uint8_t *data`
+on the data-buffer argument; the call produced incompatible
+pointer-type errors at build time on linux-mainline 7.0:
+
+  edac.c:85: error: passing argument 2 of 'encode_rs8' from
+                    incompatible pointer type
+  edac.c:115: error: passing argument 2 of 'decode_rs8' from
+                    incompatible pointer type
+
+Latent since commit 4a2198c (migrate RS FEC to lib/reed_solomon).
+Resolved in commit 867a911: pass `data` directly to the kernel APIs
+which already accept `uint8_t *`. The intermediate `uint16_t syms[]`
+buffer was redundant; removing it also drops the post-decode
+copy-back loop in the decode path, since `decode_rs8` corrects in
+place.
+
+This is a kernel-API drift issue: an earlier rslib.h convention may
+have used `uint16_t *`. The current kernel-mainline 7.0 used by
+this project requires the `uint8_t *` form.
 
 ---
 
@@ -247,7 +296,51 @@ affect upstream readiness for `meta-openembedded` submission:
   external reviewers to reproduce results without a multi-page
   setup procedure.
 
-### 6.6 Commit signing policy
+### 6.6 Build and test prerequisites (yocto-hardened layer)
+
+Two artefacts are required by the yocto-hardened image recipes for
+the HPC benchmark to start successfully but are NOT tracked by git:
+
+  * `recipes-core/images/files/munge.key`     -- 1024-byte random
+                                                 secret used by MUNGE
+                                                 for inter-node Slurm
+                                                 authentication.
+  * `recipes-core/images/files/hpclab_admin.pub` -- SSH public key
+                                                    matching
+                                                    `~/.ssh/hpclab_admin`
+                                                    on the host
+                                                    workstation.
+
+Both files have to be generated locally before the first build:
+
+```sh
+# munge.key
+cd ~/git/yocto-hardened/recipes-core/images/files/
+dd if=/dev/urandom of=munge.key bs=1 count=1024 status=none
+chmod 0400 munge.key
+
+# hpclab_admin.pub (derived from existing private key)
+ssh-keygen -y -f ~/.ssh/hpclab_admin > \
+    ~/git/yocto-hardened/recipes-core/images/files/hpclab_admin.pub
+```
+
+If either file is missing, the corresponding `ROOTFS_POSTPROCESS_COMMAND`
+in the image recipe is silently skipped (the `[ -f ... ]` guard fails
+without producing a Yocto error). The rootfs then ships without the
+key, and `bin/hpc-benchmark.sh` fails at step 5 with a password prompt
+(SSH) or at step 5/6 with a MUNGE key error (Slurm).
+
+This is documented for context but the long-term fix is upstream in
+the yocto-hardened layer: either a one-shot bootstrap script that
+generates the missing artefacts (related to known-limitation 6.5),
+or a hard error in the recipe when the file is missing instead of
+silent skip.
+
+The full validation procedure including these prerequisites is
+recorded in the project context document
+`context-ftrfs-validation.md`.
+
+### 6.7 Commit signing policy
 
 GPG commit signing is operational on the maintainer's development
 host. Earlier sessions worked around a broken `pinentry-gnome3`
