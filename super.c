@@ -253,6 +253,48 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		goto out_brelse;
 	}
 
+	/*
+	 * Validate v3 feature fields.
+	 *
+	 * s_data_protection_scheme: range-check against the enum maximum.
+	 *   The three high-order bytes of the __le32 act as a structural
+	 *   sentinel; any value above FTRFS_DATA_PROTECTION_MAX is rejected.
+	 * s_feat_incompat:  unknown bits are a hard refusal (any read).
+	 * s_feat_ro_compat: unknown bits force SB_RDONLY but allow mount.
+	 * s_feat_compat:    informational, never gates mount.
+	 */
+	{
+		u32 scheme = le32_to_cpu(fsb->s_data_protection_scheme);
+		u64 unknown_incompat  = le64_to_cpu(fsb->s_feat_incompat) &
+					~FTRFS_FEAT_INCOMPAT_SUPP;
+		u64 unknown_ro_compat = le64_to_cpu(fsb->s_feat_ro_compat) &
+					~FTRFS_FEAT_RO_COMPAT_SUPP;
+		u64 unknown_compat    = le64_to_cpu(fsb->s_feat_compat) &
+					~FTRFS_FEAT_COMPAT_SUPP;
+
+		if (scheme > FTRFS_DATA_PROTECTION_MAX) {
+			errorf(fc, "ftrfs: invalid data_protection_scheme %u (max %u)",
+			       scheme, FTRFS_DATA_PROTECTION_MAX);
+			goto out_brelse;
+		}
+
+		if (unknown_incompat) {
+			errorf(fc, "ftrfs: unsupported incompat features 0x%016llx",
+			       unknown_incompat);
+			goto out_brelse;
+		}
+
+		if (unknown_ro_compat && !sb_rdonly(sb)) {
+			pr_warn("ftrfs: unsupported ro_compat features 0x%016llx, forcing read-only mount\n",
+				unknown_ro_compat);
+			sb->s_flags |= SB_RDONLY;
+		}
+
+		if (unknown_compat)
+			pr_info("ftrfs: unknown compat features 0x%016llx (informational)\n",
+				unknown_compat);
+	}
+
 	/* Allocate in-memory sb info */
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi) {
@@ -296,10 +338,15 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 		goto out_put_root;
 	}
 
-	pr_info("ftrfs: mounted (blocks=%llu free=%lu inodes=%llu)\n",
+	pr_info("ftrfs: mounted v%u (blocks=%llu free=%lu inodes=%llu scheme=%u feat=0x%016llx/0x%016llx/0x%016llx)\n",
+		le32_to_cpu(fsb->s_version),
 		le64_to_cpu(fsb->s_block_count),
 		sbi->s_free_blocks,
-		le64_to_cpu(fsb->s_inode_count));
+		le64_to_cpu(fsb->s_inode_count),
+		le32_to_cpu(fsb->s_data_protection_scheme),
+		le64_to_cpu(fsb->s_feat_compat),
+		le64_to_cpu(fsb->s_feat_incompat),
+		le64_to_cpu(fsb->s_feat_ro_compat));
 
 	return 0;
 
