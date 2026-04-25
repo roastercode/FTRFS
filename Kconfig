@@ -36,27 +36,3 @@ config FTRFS_FS
 
 	  If unsure, say N.
 
-config FTRFS_FS_XATTR
-	bool "FTRFS extended attributes"
-	depends on FTRFS_FS
-	help
-	  Extended attributes are name:value pairs associated with inodes
-	  by mapping arbitrary names to binary values. They are required
-	  for SELinux, POSIX ACLs, and other security frameworks that
-	  store security labels or capabilities on files and directories.
-	  FTRFS stores xattrs in a dedicated area of the inode block to
-	  preserve the auditable line count required by DO-178C/ECSS-E-ST-40C.
-
-	  If you are not using SELinux or POSIX ACLs, say N.
-
-config FTRFS_FS_SECURITY
-	bool "FTRFS Security Labels"
-	depends on FTRFS_FS_XATTR
-	help
-	  Security labels support alternative access control models
-	  implemented by security modules like SELinux. This option
-	  enables an extended attribute handler for file security labels
-	  in the ftrfs filesystem, so that it will work with SELinux.
-
-	  If you are not using a security module that requires using
-	  extended attributes for file security labels, say N.

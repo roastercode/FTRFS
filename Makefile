@@ -13,7 +13,6 @@ ftrfs-y := super.o \
             alloc.o \
             namei.o
 
-ftrfs-$(CONFIG_FTRFS_FS_XATTR) += xattr.o
 
 ifneq ($(KERNELRELEASE),)
 else
@@ -34,7 +33,7 @@ PWD := $(shell pwd)
 
 all:
 	$(MAKE) -C $(KERNELDIR) $(KBUILD_OUTPUT) M=$(PWD) \
-		CONFIG_FTRFS_FS=m CONFIG_FTRFS_FS_XATTR=n CONFIG_FTRFS_FS_SECURITY=n \
+		CONFIG_FTRFS_FS=m \
 		modules
 
 clean:
