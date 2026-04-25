@@ -67,22 +67,19 @@ void ftrfs_rs_exit_tables(void)
  *
  * lib/reed_solomon works with uint16_t arrays (symbols). We expand
  * each byte to uint16_t before encoding, then truncate back to uint8_t.
- * For GF(2^8) all symbols fit in the lower 8 bits.
+ * The kernel encode_rs8 API takes uint8_t *data directly; parity is
+ * returned via a uint16_t *par buffer (low byte holds the parity symbol).
  */
 int ftrfs_rs_encode(uint8_t *data, uint8_t *parity)
 {
-	uint16_t syms[FTRFS_SUBBLOCK_DATA];
 	uint16_t par[FTRFS_RS_PARITY];
 	int i;
 
 	if (!ftrfs_rs_ctrl)
 		return -EINVAL;
 
-	for (i = 0; i < FTRFS_SUBBLOCK_DATA; i++)
-		syms[i] = data[i];
-
 	memset(par, 0, sizeof(par));
-	encode_rs8(ftrfs_rs_ctrl, syms, FTRFS_SUBBLOCK_DATA, par, 0);
+	encode_rs8(ftrfs_rs_ctrl, data, FTRFS_SUBBLOCK_DATA, par, 0);
 
 	for (i = 0; i < FTRFS_RS_PARITY; i++)
 		parity[i] = (uint8_t)par[i];
@@ -100,30 +97,25 @@ int ftrfs_rs_encode(uint8_t *data, uint8_t *parity)
  */
 int ftrfs_rs_decode(uint8_t *data, uint8_t *parity)
 {
-	uint16_t syms[FTRFS_SUBBLOCK_TOTAL];
 	uint16_t par[FTRFS_RS_PARITY];
 	int i, nerr;
 
 	if (!ftrfs_rs_ctrl)
 		return -EINVAL;
 
-	for (i = 0; i < FTRFS_SUBBLOCK_DATA; i++)
-		syms[i] = data[i];
 	for (i = 0; i < FTRFS_RS_PARITY; i++)
 		par[i] = parity[i];
 
-	nerr = decode_rs8(ftrfs_rs_ctrl, syms, par, FTRFS_SUBBLOCK_DATA,
+	/*
+	 * decode_rs8 takes uint8_t *data and corrects in place. No
+	 * temporary buffer or post-decode copy-back is needed.
+	 */
+	nerr = decode_rs8(ftrfs_rs_ctrl, data, par, FTRFS_SUBBLOCK_DATA,
 			  NULL, 0, NULL, 0, NULL);
 
 	if (nerr < 0) {
 		pr_err_ratelimited("ftrfs: RS block uncorrectable\n");
 		return -EBADMSG;
-	}
-
-	if (nerr > 0) {
-		/* Corrections applied — write back corrected data */
-		for (i = 0; i < FTRFS_SUBBLOCK_DATA; i++)
-			data[i] = (uint8_t)syms[i];
 	}
 
 	return 0;
