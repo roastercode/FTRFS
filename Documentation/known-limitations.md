@@ -1,0 +1,276 @@
+# FTRFS Known Limitations
+
+**Status**: factual record of unresolved limitations in the current
+codebase (HEAD at the time of this document's last revision).
+**Audience**: downstream integrators, kernel reviewers, future
+contributors, certification auditors.
+**Last updated**: 2026-04-25.
+
+---
+
+## 1. Purpose and scope
+
+This document records what is **known to be incomplete, suboptimal,
+or absent** in the current FTRFS implementation, with the intent of
+giving an honest baseline for anyone reading the source tree.
+
+It is the operational counterpart to two normative documents:
+
+- `Documentation/threat-model.md` defines what the architecture
+  must achieve. This document records the gap between that target
+  and the current implementation.
+- `Documentation/roadmap.md` defines what is planned next. This
+  document does not duplicate the roadmap; it states the present.
+
+Items listed here are **not commitments to fix on a particular
+schedule**. Some will be addressed; some may be reclassified as
+"won't fix" with documented rationale; some may be superseded by
+architectural changes that make them moot. The honest enumeration
+matters more than the resolution timeline.
+
+When an item is resolved, it is removed from this document and
+appears in the relevant commit message and release notes.
+
+---
+
+## 2. Architectural limitations relative to the threat model
+
+Each item below references the corresponding constraint in
+`threat-model.md` section 6. The current implementation does not
+yet satisfy these constraints. Resolution is the principal subject
+of subsequent development stages.
+
+| Threat model constraint | Current implementation state |
+|--------------------------|-------------------------------|
+| 6.1 Universal data block protection (no opt-in) | Not implemented. RS FEC currently protects the on-disk allocation bitmap and, optionally, individual inodes flagged with `FTRFS_INODE_FL_RS_ENABLED`. Data blocks themselves are not protected. |
+| 6.2 Burst tolerance through stripe geometry | Not implemented. The bitmap uses 16 RS(255,239) sub-blocks packed within a single 4 KiB block, with no cross-block parity distribution. A burst exceeding 8 symbols within one 256-byte sub-block is uncorrectable in the current design. |
+| 6.3 Unconditional inode RS protection | Code present, semantics are per-inode opt-in via `FTRFS_INODE_FL_RS_ENABLED`. The threat model elevates this to mandatory; the gating flag is to be removed and protection applied to all inodes. |
+| 6.3 Superblock RS correction | Not implemented. The superblock has CRC32 detection only. Corruption of the superblock currently leads to mount failure, not to in-place correction. |
+| 6.4 Shannon entropy in RS journal | Not implemented. The `ftrfs_rs_event` structure records block number, timestamp, error symbol count, and per-entry CRC32, but not an entropy estimate. Distinguishing Family A (Poisson background) from Family B (correlated burst) post-event is therefore presently inferential rather than recorded.|
+| 6.5 Bounded auditable code size | Currently met. Total source approximately 2700 lines kernel-side; the 5000-line target leaves margin for the items above plus planned features. |
+| 6.6 In-kernel, in-place, on-IO-path correction | Met for metadata and bitmap. The IO path uses iomap with a hook on the bitmap read path; the equivalent hook on the data block read path is part of the work to address constraint 6.1. |
+
+---
+
+## 3. Implementation correctness items
+
+These are localized issues identified by code review or operation,
+where the code does not crash or misbehave in observed runs but
+where the behavior is either ambiguous, defensive coverage is
+missing, or dead code remains in tree.
+
+### 3.1 Dead or unused declarations in `ftrfs.h`
+
+`FTRFS_INODE_FL_RS_ENABLED`, `FTRFS_INODE_RS_DATA`, and
+`FTRFS_INODE_RS_PAR` are defined but only `FTRFS_INODE_FL_RS_ENABLED`
+has a referenced semantic, and per the threat model that semantic
+is to be retired. The macros must either be wired into a real
+behavior or removed.
+
+### 3.2 Inode number leak in `ftrfs_create` error path
+
+In the namei.c `ftrfs_create` path, an allocated inode number can
+be leaked if a subsequent step fails (e.g., directory entry write
+failure). The error unwinding does not currently call
+`ftrfs_free_inode_num` on all failure branches.
+
+### 3.3 Inconsistent handling of `d_rec_len == 0` between `dir.c` and `namei.c`
+
+`dir.c::ftrfs_readdir` treats `d_rec_len == 0` as the end of valid
+directory entries within a block. `namei.c` paths that scan
+directories for free slots or for renames have a slightly different
+convention. The two should be aligned, with the chosen convention
+documented inline.
+
+### 3.4 Missing bounds check in `mkfs.ftrfs`
+
+`mkfs.ftrfs` does not currently verify
+`total_blocks <= 30592 + data_start_blk` before formatting. The
+on-disk bitmap, with 16 sub-blocks of 239 bytes each addressing
+8 bits per byte, can address at most 30592 blocks. A larger device
+will be silently formatted with a bitmap that under-represents the
+addressable space.
+
+### 3.5 Semantic mismatch in `ftrfs_rs_decode` return convention
+
+`edac.c::ftrfs_rs_decode` returns 0 on success (corrected or clean)
+and `-EBADMSG` on uncorrectable failure. The number of symbols
+corrected is not returned to the caller.
+
+`alloc.c::ftrfs_setup_bitmap` consumes the return value with the
+condition `if (rc > 0)` to identify a "corrected sub-block" event,
+which never matches under the current decoder semantics. As a
+consequence, the Radiation Event Journal currently does not log
+bitmap corrections that did occur.
+
+This is a behavioral defect: corrections are applied (the bitmap
+data is restored), but the operational record is incomplete. Two
+fixes are possible:
+
+1. Modify `ftrfs_rs_decode` to return the symbol count on success
+   while keeping `-EBADMSG` for uncorrectable, and update all
+   callers.
+2. Have `ftrfs_setup_bitmap` re-derive whether a correction occurred
+   by comparing pre- and post-decode buffers.
+
+Option (1) is preferred because it provides the symbol count
+needed for the entropy estimate (constraint 6.4).
+
+This finding is recorded here for the first time; it was identified
+during the architectural review that produced `threat-model.md`.
+
+---
+
+## 4. Filesystem feature limitations
+
+These are deliberate scope restrictions of the current
+implementation, documented for clarity. They are not defects in the
+sense that the implementation matches its current specification;
+they are gaps relative to a fully POSIX-compliant general-purpose
+filesystem, which FTRFS does not currently aim to be.
+
+| Feature | Status |
+|---------|--------|
+| Maximum file size | Approximately 2 MiB (12 direct blocks + 1 single indirect block of 512 pointers). Double and triple indirect are declared in the inode but not implemented. |
+| Symbolic links | Not supported. |
+| Extended attributes (xattr) | Not supported. |
+| SELinux labels (`security.selinux` xattr) | Not supported. |
+| POSIX ACLs (`system.posix_acl_*` xattr) | Not supported. |
+| `RENAME_EXCHANGE` flag | Returns `-EINVAL`. |
+| `RENAME_WHITEOUT` flag | Returns `-EINVAL`. |
+| `SB_RDONLY` enforcement | Not enforced. Writes to the superblock buffer occur on RS journal updates and bitmap writeback even if the filesystem was mounted read-only. |
+| Online filesystem resize (grow/shrink) | Not supported. |
+| Quotas | Not supported. |
+| Reflinks (`FICLONE`, `FICLONERANGE`) | Not supported. |
+
+---
+
+## 5. Test coverage limitations
+
+### 5.1 xfstests
+
+Four `generic/*` tests have been validated: 002, 010, 098, 257.
+
+`generic/001` requires a test image larger than 2 GiB to run to
+completion (the test creates 200 sequential copies of approximately
+3 MiB). On the current 512 MiB QEMU test image this exceeds the
+available space and the test exits early. This is an environment
+limit, not a defect in FTRFS handling of the test workload.
+
+A full xfstests Yocto recipe with a sized scratch image is not yet
+in place. The four passing tests are run manually with a documented
+procedure (`Documentation/testing.md`).
+
+### 5.2 Fault injection
+
+There is no automated fault-injection harness for FTRFS in tree.
+The only on-disk corruption testing performed to date has been
+manual (single bit flips in the bitmap block, observed mount-time
+correction). The threat model requires demonstrated coverage of:
+
+- single-symbol errors in each protected structure
+- multi-symbol errors at and just below the RS correction limit
+- uncorrectable errors (verified to fail closed, not silently)
+- burst errors crossing sub-block boundaries
+- corruption events on metadata structures (superblock, inode
+  table, bitmap, directory blocks)
+
+A test framework providing reproducible injection of these
+scenarios is required for the project to claim coverage of the
+threat model. None exists at the time of writing.
+
+### 5.3 Fuzzing
+
+No targeted fuzzing has been performed on FTRFS to date. Both
+syzkaller (kernel module syscall surface) and afl++ (mkfs and
+mount-time parsing of corrupted images) are appropriate tools and
+are part of the planned offensive-security review stage.
+
+---
+
+## 6. Tooling and infrastructure
+
+These items are not part of the kernel module itself but affect
+reproducibility, integration, and operational use.
+
+### 6.1 Mkfs / kernel parity validation
+
+There is no automated test that compares, byte for byte, the
+parity bytes produced by `mkfs.ftrfs`'s embedded RS encoder
+against those produced by the kernel's `lib/reed_solomon` for the
+same input. A one-time manual validation has been performed and
+recorded in `Documentation/testing.md` section "RS FEC Parity
+Validation". An automated regression test should be added to the
+xfstests recipe or to a dedicated tooling test suite.
+
+### 6.2 `linux-mainline.cfg` provenance
+
+The kernel configuration fragment used to build the test kernel
+without KASAN/UBSAN noise is currently untracked. Its location and
+versioning status need to be resolved: either it becomes part of
+the layer (tracked, with a clear rationale documented for the
+KASAN/UBSAN exclusion in the test path), or it is removed and the
+default mainline configuration is used.
+
+### 6.3 Cross-project file separation
+
+A directory at `/tmp/bug-bounty-stash/` on the development host
+contains kernel research files unrelated to FTRFS. These were
+adjacent during earlier development sessions but are out of scope
+for this project. Their relocation to a separate repository (e.g.,
+a local `bug-bounty-rdma` tree) is pending.
+
+### 6.4 `bin/hpc-benchmark.sh` robustness under sudo
+
+The HPC benchmark script in the yocto-hardened repository uses
+`~/.ssh/hpclab_admin` for SSH key resolution. When invoked under
+`sudo`, `~` resolves to `/root` and the key path becomes invalid.
+The current workaround is to call `sudo -v` first and run the
+script as the regular user. The script should be modified to use
+an absolute path or to derive the path from the invoking user's
+home directory explicitly.
+
+### 6.5 Yocto layer items
+
+The following are tracked in the yocto-hardened repository and
+affect upstream readiness for `meta-openembedded` submission:
+
+- `yocto-check-layer` does not yet PASS cleanly on the
+  `arm64-ftrfs` branch.
+- Several HPC recipes lack `LIC_FILES_CHKSUM` and `HOMEPAGE`
+  fields required by the layer index.
+- Local patches against GCC 15 and QEMU are carried in the layer;
+  these should either be removed (if the upstream issues are
+  fixed) or proposed upstream to OE-Core.
+- No one-shot bootstrap script exists that performs clone, build,
+  and benchmark in a reproducible sequence. This is required for
+  external reviewers to reproduce results without a multi-page
+  setup procedure.
+
+## 7. Document maintenance
+
+This document is reviewed at each release tag. The review consists
+of:
+
+1. For each item, determining whether it has been resolved,
+   superseded, or remains valid.
+2. Removing resolved items (their resolution being recorded in
+   the relevant commit message and release notes).
+3. Adding any new limitations identified since the previous review.
+4. Reordering or restructuring sections only if the threat model
+   itself has changed.
+
+Editorial corrections (typos, formatting, dead links) do not
+require this process and may be applied at any time.
+
+---
+
+## 8. Cross-references
+
+| Document | Role |
+|----------|------|
+| `Documentation/threat-model.md` | Normative architectural constraints. Section 6 lists the constraints whose unmet status is recorded in section 2 of the present document. |
+| `Documentation/roadmap.md` | Forward-looking work plan. Items in the present document are not roadmap items; the roadmap may or may not address a given limitation. |
+| `Documentation/system-architecture.md` | Positioning of FTRFS in the Linux storage stack and reference deployment scenarios. |
+| `Documentation/design.md` | On-disk format specification. Limitations of the current format are reflected here. |
+| `Documentation/testing.md` | Current test procedures and results. Section 5 of the present document complements `testing.md` with the test coverage gaps. |
