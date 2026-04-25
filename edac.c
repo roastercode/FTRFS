@@ -141,3 +141,25 @@ __u32 ftrfs_crc32(const void *buf, size_t len)
 {
 	return crc32_le(0xFFFFFFFF, buf, len) ^ 0xFFFFFFFF;
 }
+
+/*
+ * ftrfs_crc32_sb -- compute CRC32 over the meaningful regions of the
+ *                   superblock, excluding s_crc32 itself and s_pad.
+ *
+ * Coverage:
+ *   [0, offsetof(s_crc32))               = 64 bytes
+ *   [offsetof(s_uuid), offsetof(s_pad))  = 1593 bytes
+ *
+ * Chained via crc32_le without intermediate XOR. Must match the
+ * userspace mkfs.ftrfs implementation byte-for-byte so that v2
+ * superblocks formatted by mkfs validate at mount time.
+ */
+__u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb)
+{
+	const u8 *base = (const u8 *)fsb;
+	u32 c;
+
+	c = crc32_le(0xFFFFFFFF, base, 64);
+	c = crc32_le(c, base + 68, 1661 - 68);
+	return c ^ 0xFFFFFFFF;
+}
