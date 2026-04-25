@@ -58,6 +58,59 @@ struct ftrfs_rs_event {
 #define FTRFS_RS_JOURNAL_SIZE  64   /* entries in the radiation event journal */
 
 /*
+ * On-disk format versions
+ *   v2 -- bitmap RS FEC (introduced 2026-04-17)
+ *   v3 -- extension points: feature bitmaps + data protection scheme
+ */
+#define FTRFS_VERSION_V2        2
+#define FTRFS_VERSION_V3        3
+#define FTRFS_VERSION_CURRENT   FTRFS_VERSION_V3
+
+/*
+ * Data protection scheme values for s_data_protection_scheme.
+ *
+ * NONE              -- no FEC on data blocks (legacy behaviour, deprecated).
+ * INODE_OPT_IN      -- RS FEC enabled per-inode via FTRFS_INODE_FL_RS_ENABLED.
+ *                     This is the v0.1.0 baseline behaviour. Deprecated by
+ *                     threat model 6.3 (see Documentation/threat-model.md).
+ * UNIVERSAL_INLINE  -- RS parity bytes embedded inline within each data block.
+ *                     Reserved for stage 4 of the staged plan.
+ * UNIVERSAL_SHADOW  -- RS parity stored in a dedicated out-of-band region.
+ *                     Reserved for stage 4 of the staged plan.
+ * UNIVERSAL_EXTENT  -- RS parity attached as an extent-based filesystem
+ *                     attribute. Reserved for stage 4 of the staged plan.
+ *
+ * The kernel range-checks this field at mount and refuses values above
+ * FTRFS_DATA_PROTECTION_MAX. Three unused upper bytes of the __le32 act
+ * as a structural sentinel: any single-byte corruption in the high-order
+ * bytes produces a value outside the valid range and is rejected.
+ */
+#define FTRFS_DATA_PROTECTION_NONE              0
+#define FTRFS_DATA_PROTECTION_INODE_OPT_IN      1
+#define FTRFS_DATA_PROTECTION_UNIVERSAL_INLINE  2
+#define FTRFS_DATA_PROTECTION_UNIVERSAL_SHADOW  3
+#define FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT  4
+#define FTRFS_DATA_PROTECTION_MAX               FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT
+
+/*
+ * Feature flag masks.
+ *
+ * s_feat_compat     -- informational flags. Unknown bits are logged but
+ *                     do not prevent mount.
+ * s_feat_incompat   -- structural format extensions. Unknown bits cause
+ *                     mount to be refused (read or write).
+ * s_feat_ro_compat  -- features that prevent safe write. Unknown bits cause
+ *                     mount to be forced read-only with a warning.
+ *
+ * In FTRFS_VERSION_V3 no feature bits are allocated; all three masks are
+ * zero. Future features will allocate bits and update the corresponding
+ * SUPP mask.
+ */
+#define FTRFS_FEAT_COMPAT_SUPP      0ULL
+#define FTRFS_FEAT_INCOMPAT_SUPP    0ULL
+#define FTRFS_FEAT_RO_COMPAT_SUPP   0ULL
+
+/*
  * On-disk superblock — block 0
  * Total size: fits in one 4096-byte block
  */
@@ -78,7 +131,11 @@ struct ftrfs_super_block {
 	 struct ftrfs_rs_event s_rs_journal[FTRFS_RS_JOURNAL_SIZE]; /* 1536 bytes */
 	__u8    s_rs_journal_head;  /* next write index (ring buffer) */
 	__le64  s_bitmap_blk;       /* On-disk block bitmap block number */
-	__u8    s_pad[2435];        /* Padding to 4096 bytes */
+	__le64  s_feat_compat;      /* Compatible feature flags (informational) */
+	__le64  s_feat_incompat;    /* Incompatible features: refuse mount if unknown bit set */
+	__le64  s_feat_ro_compat;   /* RO-compat features: force RO mount if unknown bit set */
+	__le32  s_data_protection_scheme; /* enum FTRFS_DATA_PROTECTION_* */
+	__u8    s_pad[2407];        /* Padding to 4096 bytes */
 } __packed;
 
 /*
