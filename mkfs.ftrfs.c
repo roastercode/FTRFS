@@ -104,6 +104,9 @@ struct ftrfs_super_block {
 /*
  * crc32_sb — CRC32 over superblock fields matching ftrfs_crc32_sb() in kernel.
  * Covers [0, offsetof(s_crc32)) and [offsetof(s_uuid), offsetof(s_pad)).
+ *
+ * Coverage region 2 = 1621 bytes, sized for the v3 superblock layout
+ * which includes the feature fields between s_bitmap_blk and s_pad.
  */
 static uint32_t crc32_sb(const struct ftrfs_super_block *sb)
 {
@@ -111,7 +114,7 @@ static uint32_t crc32_sb(const struct ftrfs_super_block *sb)
 	uint32_t c;
 
 	c = crc32_internal(0xFFFFFFFF, base, 64);
-	c = crc32_internal(c, base + 68, 1661 - 68);
+	c = crc32_internal(c, base + 68, 1689 - 68);
 	return c ^ 0xFFFFFFFF;
 }
 

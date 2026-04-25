@@ -148,11 +148,17 @@ __u32 ftrfs_crc32(const void *buf, size_t len)
  *
  * Coverage:
  *   [0, offsetof(s_crc32))               = 64 bytes
- *   [offsetof(s_uuid), offsetof(s_pad))  = 1593 bytes
+ *   [offsetof(s_uuid), offsetof(s_pad))  = 1621 bytes
  *
  * Chained via crc32_le without intermediate XOR. Must match the
- * userspace mkfs.ftrfs implementation byte-for-byte so that v2
+ * userspace mkfs.ftrfs implementation byte-for-byte so that
  * superblocks formatted by mkfs validate at mount time.
+ *
+ * The v3 format extension (commit 2ec4cb4) added 28 bytes of
+ * feature fields between s_bitmap_blk and s_pad; the second
+ * coverage region is sized to include them. v2 superblocks
+ * predating that extension are correctly rejected by the
+ * resulting CRC mismatch.
  */
 __u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb)
 {
@@ -160,6 +166,6 @@ __u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb)
 	u32 c;
 
 	c = crc32_le(0xFFFFFFFF, base, 64);
-	c = crc32_le(c, base + 68, 1661 - 68);
+	c = crc32_le(c, base + 68, 1689 - 68);
 	return c ^ 0xFFFFFFFF;
 }
