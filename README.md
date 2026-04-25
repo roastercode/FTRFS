@@ -6,8 +6,10 @@ metadata (superblock, inodes, Radiation Event Journal) and Reed-Solomon
 forward error correction on the on-disk allocation bitmap via the kernel's
 `lib/reed_solomon` library. The design targets embedded Linux systems on
 single-device storage (MRAM, NOR flash) where no external redundancy is
-available. Extending RS FEC to data blocks at writeback is on the roadmap
-(see `Documentation/roadmap.md`, priority 3).
+available. The architectural target is universal RS FEC protection of
+all data blocks; the current implementation protects metadata and the
+on-disk allocation bitmap, with universal data block protection as the
+next major milestone (see `Documentation/threat-model.md`).
 
 This implementation is an independent open-source realization of the design
 described in:
@@ -45,6 +47,33 @@ A secondary constraint is code auditability. Standards such as DO-178C
 complete auditability of safety-critical software. ext4 (~100k lines) and
 btrfs (~200k lines) are not realistically certifiable under these frameworks.
 FTRFS is designed to stay under 5000 lines of auditable code.
+
+---
+
+## Threat Model
+
+FTRFS addresses two distinct families of failure that share a common
+technical signature — silent bit corruption in data at rest on a
+single read-write storage device — but differ in their causal origin
+and statistical distribution:
+
+- **Family A** — benign single-event upsets (cosmic rays, MRAM/NOR
+  retention loss, industrial radiation environments). Spatially
+  uniform, Poisson-distributed.
+- **Family B** — adversarial electromagnetic events (HPM, IEMI, EMP,
+  RF weapons in conflict zones). Spatially correlated, burst
+  distributed, may exceed per-block RS capacity without interleaving.
+
+Both families require in-place correction on a read-write single
+device, fully in-kernel, without external redundancy — a combination
+not provided by any existing Linux or BSD storage component
+(ext4, btrfs, ZFS, dm-verity, dm-integrity, HAMMER2, UFS2).
+
+The full failure model, gap analysis, deployment scenarios, and
+normative architectural constraints derived from this threat model
+are documented in [`Documentation/threat-model.md`](Documentation/threat-model.md).
+That document is normative: subsequent design decisions are evaluated
+against the constraints it defines.
 
 ---
 
