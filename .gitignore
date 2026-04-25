@@ -21,3 +21,8 @@ Module.symvers
 modules.order
 block.c
 CONTEXT*.md
+*.mbx
+*.mbox
+ftrfs-src.tar.gz
+mbox-archive/
+press-archive/
