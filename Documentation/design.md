@@ -8,7 +8,11 @@ Structure sizes are enforced at compile time by `BUILD_BUG_ON`.
 
 ---
 
-## Block Layout (v2)
+## Block Layout (v3)
+
+The block layout is unchanged from v2. Only the superblock structure
+gained extension fields (see below); all block positions and the
+RS FEC bitmap layout are identical.
 
 ```
 Block 0            superblock (4096 bytes, magic 0x46545246)
@@ -44,7 +48,7 @@ struct ftrfs_super_block {
     __le64  s_free_inodes;      /* free inodes */
     __le64  s_inode_table_blk;  /* first block of inode table */
     __le64  s_data_start_blk;   /* first data block */
-    __le32  s_version;          /* filesystem version (2 = bitmap RS FEC) */
+    __le32  s_version;          /* filesystem version (3 = format extension points) */
     __le32  s_flags;            /* reserved */
     __le32  s_crc32;            /* CRC32 over meaningful fields */
     __u8    s_uuid[16];         /* volume UUID */
@@ -53,7 +57,11 @@ struct ftrfs_super_block {
             s_rs_journal[64];   /* Radiation Event Journal (1536 bytes) */
     __u8    s_rs_journal_head;  /* next write index (ring buffer, 0..63) */
     __le64  s_bitmap_blk;       /* on-disk block bitmap block number */
-    __u8    s_pad[2435];        /* padding to 4096 bytes */
+    __le64  s_feat_compat;      /* informational features (v3+) */
+    __le64  s_feat_incompat;    /* incompatible features (v3+) */
+    __le64  s_feat_ro_compat;   /* RO-compat features (v3+) */
+    __le32  s_data_protection_scheme; /* enum, see below (v3+) */
+    __u8    s_pad[2407];        /* padding to 4096 bytes */
 } __packed;
 ```
 
@@ -64,16 +72,86 @@ module init.
 
 `s_crc32` is computed by `ftrfs_crc32_sb()` over two non-contiguous regions:
 
-- `[0, offsetof(s_crc32))` — 64 bytes (fields before the checksum)
-- `[offsetof(s_uuid), offsetof(s_pad))` — 1597 bytes (UUID, label, RS journal,
-  s_rs_journal_head, s_bitmap_blk)
+- `[0, offsetof(s_crc32))` -- 64 bytes (fields before the checksum)
+- `[offsetof(s_uuid), offsetof(s_pad))` -- 1621 bytes (UUID, label, RS journal,
+  s_rs_journal_head, s_bitmap_blk, and the four v3 feature fields)
 
-Total coverage: 1661 bytes. The padding `s_pad` is excluded. The two regions
+Total coverage: 1685 bytes. The padding `s_pad` is excluded. The two regions
 are chained via `crc32_le()` without intermediate XOR, matching the standard
 CRC-32/ISO-HDLC convention (`seed = 0xFFFFFFFF`, final XOR `0xFFFFFFFF`).
 
 Both the kernel (`ftrfs_crc32_sb()` in `edac.c`) and `mkfs.ftrfs` use
-`[68, 1661)` as the second region, covering `s_bitmap_blk`.
+`[68, 1689)` as the second region, covering all v3 fields up to but
+excluding `s_pad`.
+
+A v2 superblock read by a v3 kernel fails this CRC32 check (the kernel
+covers 28 more bytes than v2 wrote into the parity computation), and is
+correctly rejected at mount time. There is no version-detection logic
+beyond this; the CRC32 mismatch is the version barrier.
+
+---
+
+## Format versions
+
+| Version | Tag           | Introduced                                | Notes |
+|---------|---------------|-------------------------------------------|-------|
+| 2       | (pre-v0.1.0)  | 2026-04-17 (commit fd371f3)               | On-disk bitmap with RS FEC. |
+| 3       | v0.2.0+       | 2026-04-26 (commit 2ec4cb4 + follow-ups)  | Adds extension points: feature bitmaps and `s_data_protection_scheme`. Block layout unchanged. |
+
+Mounting a v2 image on a v3 kernel is refused at the CRC32 check (see
+"Superblock CRC32" above). Mounting a v3 image on a v2 kernel is
+similarly refused for the same reason. There is no in-place migration
+tool; v2 images that need to be carried forward must be reformatted
+after data evacuation.
+
+---
+
+## Feature flags
+
+Three independent 64-bit bitmaps, all introduced in v3 and all set to
+zero in the v3 baseline. Future features will allocate bits.
+
+| Field               | Semantics if an unknown bit is set                          |
+|---------------------|-------------------------------------------------------------|
+| `s_feat_compat`     | Informational `pr_info` only; does not gate mount.          |
+| `s_feat_incompat`   | Mount is refused (read or write).                           |
+| `s_feat_ro_compat`  | Mount is forced read-only with a `pr_warn`.                 |
+
+The corresponding "supported" masks `FTRFS_FEAT_*_SUPP` are defined in
+`ftrfs.h`. They are all `0ULL` in v3 and grow as features land.
+
+The `s_feat_ro_compat` graceful-degradation behaviour is deliberate
+and aligned with the threat model (`Documentation/threat-model.md`
+section 5): for long-unattended and mission-critical deployments,
+fail-stop on a feature mismatch is itself a mission failure. A v3+
+kernel encountering an unknown ro_compat bit on a v3+ image preserves
+read access (telemetry, last-known-good logs, autonomous-erase
+triggers) instead of refusing to mount.
+
+---
+
+## Data protection schemes
+
+`s_data_protection_scheme` is an `__le32` enum that records which
+data-block protection scheme the format was written with. The kernel
+range-checks it at mount and refuses values above
+`FTRFS_DATA_PROTECTION_MAX`.
+
+| Value | Symbol                                  | Meaning |
+|-------|------------------------------------------|---------|
+| 0     | `FTRFS_DATA_PROTECTION_NONE`             | No FEC on data blocks (legacy mode, deprecated). |
+| 1     | `FTRFS_DATA_PROTECTION_INODE_OPT_IN`     | RS FEC enabled per-inode via `FTRFS_INODE_FL_RS_ENABLED`. v0.1.0 baseline behaviour. Deprecated by threat model 6.3. |
+| 2     | `FTRFS_DATA_PROTECTION_UNIVERSAL_INLINE` | (Reserved) RS parity bytes embedded inline within each data block. |
+| 3     | `FTRFS_DATA_PROTECTION_UNIVERSAL_SHADOW` | (Reserved) RS parity stored in a dedicated out-of-band region. |
+| 4     | `FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT` | (Reserved) RS parity attached as an extent-based filesystem attribute. |
+
+The choice of `__le32` (4 bytes) over `__u8` (1 byte) is a structural
+sentinel: any single-byte SEU on the three high-order zero bytes
+produces a value above the enum maximum and is rejected by the
+mount-time range check.
+
+In v3, mkfs writes value 1 (`INODE_OPT_IN`). Stages 3 and 4 of the
+staged plan (see `RAF.md`) introduce the universal schemes.
 
 ---
 
