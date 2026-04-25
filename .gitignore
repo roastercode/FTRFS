@@ -26,3 +26,9 @@ CONTEXT*.md
 ftrfs-src.tar.gz
 mbox-archive/
 press-archive/
+
+# Release artifacts: tarballs are reproducible from git tags via
+# 'git archive --format=tar.gz --prefix=ftrfs-<TAG>/ <TAG>',
+# so we don't track them. Sigstore bundles ARE tracked because
+# each signature is unique and not reproducible.
+releases/*.tar.gz
