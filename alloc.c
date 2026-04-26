@@ -93,25 +93,36 @@ int ftrfs_setup_bitmap(struct super_block *sb)
 	bdata = (u8 *)bh->b_data;
 
 	/*
-	 * Decode each RS(255,239) subblock. ftrfs_rs_decode() corrects up
-	 * to 8 symbol errors in place and returns the number of corrections
-	 * made (0 = clean, >0 = corrected, <0 = uncorrectable).
+	 * Decode each RS(255,239) subblock via the region helper. The
+	 * results[] array holds the per-subblock decode outcome so the
+	 * caller can log RS journal events for corrected and
+	 * uncorrectable cases. ftrfs_rs_decode currently returns 0 on
+	 * success regardless of the symbol count (known-limitations 3.5);
+	 * the rc > 0 branch below remains in place for when the return
+	 * convention is fixed in stage 3 item 3.
 	 */
-	for (i = 0; i < FTRFS_BITMAP_SUBBLOCKS; i++) {
-		u8 *subdata   = bdata + i * FTRFS_SUBBLOCK_TOTAL;
-		u8 *subparity = subdata + FTRFS_SUBBLOCK_DATA;
-		int rc;
+	{
+		int rs_results[FTRFS_BITMAP_SUBBLOCKS];
 
-		rc = ftrfs_rs_decode(subdata, FTRFS_SUBBLOCK_DATA, subparity);
-		if (rc < 0) {
-			pr_err("ftrfs: bitmap subblock %lu uncorrectable\n", i);
-		} else if (rc > 0) {
-			pr_warn("ftrfs: bitmap subblock %lu: %d symbol(s) corrected\n",
-				i, rc);
-			ftrfs_log_rs_event(sb,
-				(u64)bitmap_blk * FTRFS_BITMAP_SUBBLOCKS + i,
-				(u32)rc);
-			corrected = true;
+		ftrfs_rs_decode_region(
+			bdata, FTRFS_SUBBLOCK_TOTAL,
+			bdata + FTRFS_SUBBLOCK_DATA, FTRFS_SUBBLOCK_TOTAL,
+			FTRFS_SUBBLOCK_DATA, FTRFS_BITMAP_SUBBLOCKS,
+			rs_results);
+
+		for (i = 0; i < FTRFS_BITMAP_SUBBLOCKS; i++) {
+			int rc = rs_results[i];
+
+			if (rc < 0) {
+				pr_err("ftrfs: bitmap subblock %lu uncorrectable\n", i);
+			} else if (rc > 0) {
+				pr_warn("ftrfs: bitmap subblock %lu: %d symbol(s) corrected\n",
+					i, rc);
+				ftrfs_log_rs_event(sb,
+					(u64)bitmap_blk * FTRFS_BITMAP_SUBBLOCKS + i,
+					(u32)rc);
+				corrected = true;
+			}
 		}
 	}
 
@@ -221,13 +232,11 @@ int ftrfs_write_bitmap(struct super_block *sb)
 		}
 	}
 
-	/* Re-encode RS parity for each subblock */
-	for (i = 0; i < FTRFS_BITMAP_SUBBLOCKS; i++) {
-		u8 *subdata   = bdata + i * FTRFS_SUBBLOCK_TOTAL;
-		u8 *subparity = subdata + FTRFS_SUBBLOCK_DATA;
-
-		ftrfs_rs_encode(subdata, FTRFS_SUBBLOCK_DATA, subparity);
-	}
+	/* Re-encode RS parity for each subblock via the region helper */
+	ftrfs_rs_encode_region(
+		bdata, FTRFS_SUBBLOCK_TOTAL,
+		bdata + FTRFS_SUBBLOCK_DATA, FTRFS_SUBBLOCK_TOTAL,
+		FTRFS_SUBBLOCK_DATA, FTRFS_BITMAP_SUBBLOCKS);
 
 	mark_buffer_dirty(sbi->s_bitmap_blkh);
 	return 0;

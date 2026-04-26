@@ -265,6 +265,21 @@ __u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb);
 int ftrfs_rs_encode(u8 *data, size_t len, u8 *parity);
 int ftrfs_rs_decode(u8 *data, size_t len, u8 *parity);
 
+/*
+ * Encode/decode N RS(255,239) shortened subblocks across a
+ * region. data and parity may live in the same buffer
+ * (interleaved layout, like the bitmap) or in two separate
+ * buffers (contiguous-parity layout, like the superblock).
+ * The strides decouple the two cases.
+ */
+int ftrfs_rs_encode_region(u8 *data_buf, size_t data_stride,
+			   u8 *parity_buf, size_t parity_stride,
+			   size_t data_len, unsigned int n_subblocks);
+int ftrfs_rs_decode_region(u8 *data_buf, size_t data_stride,
+			   u8 *parity_buf, size_t parity_stride,
+			   size_t data_len, unsigned int n_subblocks,
+			   int *results);
+
 /* alloc.c */
 int  ftrfs_setup_bitmap(struct super_block *sb);
 int  ftrfs_write_bitmap(struct super_block *sb);

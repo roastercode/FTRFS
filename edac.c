@@ -137,6 +137,87 @@ int ftrfs_rs_decode(uint8_t *data, size_t len, uint8_t *parity)
 }
 
 /*
+ * ftrfs_rs_encode_region -- encode N RS(255,239) shortened subblocks
+ * across a region.
+ *
+ * @data_buf:      base pointer of the data region
+ * @data_stride:   distance in bytes between the start of two
+ *                 consecutive data subblocks (e.g.
+ *                 FTRFS_SUBBLOCK_TOTAL=255 for the bitmap)
+ * @parity_buf:    base pointer of the parity region (may equal
+ *                 data_buf + data_len for the interleaved case)
+ * @parity_stride: distance between the start of two consecutive
+ *                 parity blobs (e.g. FTRFS_SUBBLOCK_TOTAL=255 for
+ *                 the bitmap, FTRFS_RS_PARITY=16 for contiguous
+ *                 parity placement)
+ * @data_len:      number of data bytes per subblock (e.g.
+ *                 FTRFS_SUBBLOCK_DATA=239 for a full subblock)
+ * @n_subblocks:   number of subblocks to encode
+ *
+ * Returns 0 on success, negative on the first encode failure.
+ * On failure the buffer is in an indeterminate state.
+ */
+int ftrfs_rs_encode_region(u8 *data_buf, size_t data_stride,
+			   u8 *parity_buf, size_t parity_stride,
+			   size_t data_len, unsigned int n_subblocks)
+{
+	unsigned int i;
+
+	if (!data_buf || !parity_buf)
+		return -EINVAL;
+
+	for (i = 0; i < n_subblocks; i++) {
+		u8 *d = data_buf   + (size_t)i * data_stride;
+		u8 *p = parity_buf + (size_t)i * parity_stride;
+		int rc = ftrfs_rs_encode(d, data_len, p);
+
+		if (rc < 0)
+			return rc;
+	}
+	return 0;
+}
+
+/*
+ * ftrfs_rs_decode_region -- decode N RS(255,239) shortened subblocks
+ * across a region. Symmetric to ftrfs_rs_encode_region.
+ *
+ * @results:       optional, n_subblocks entries. On exit each
+ *                 entry holds the result of ftrfs_rs_decode for
+ *                 the corresponding subblock (0 on success today,
+ *                 negative for uncorrectable; the symbol-count
+ *                 return is pending known-limitations 3.5 fix).
+ *                 Pass NULL to skip per-subblock reporting.
+ *
+ * Returns 0 if every subblock decoded successfully, the first
+ * negative error otherwise. Decoding does not stop on error: all
+ * subblocks are processed, results[] reflects the per-subblock
+ * outcome, and the worst negative error is returned.
+ */
+int ftrfs_rs_decode_region(u8 *data_buf, size_t data_stride,
+			   u8 *parity_buf, size_t parity_stride,
+			   size_t data_len, unsigned int n_subblocks,
+			   int *results)
+{
+	unsigned int i;
+	int worst = 0;
+
+	if (!data_buf || !parity_buf)
+		return -EINVAL;
+
+	for (i = 0; i < n_subblocks; i++) {
+		u8 *d = data_buf   + (size_t)i * data_stride;
+		u8 *p = parity_buf + (size_t)i * parity_stride;
+		int rc = ftrfs_rs_decode(d, data_len, p);
+
+		if (results)
+			results[i] = rc;
+		if (rc < 0 && worst >= 0)
+			worst = rc;
+	}
+	return worst;
+}
+
+/*
  * ftrfs_crc32 — compute CRC32 checksum
  * @buf: data buffer
  * @len: length in bytes
