@@ -225,3 +225,99 @@ A Yocto recipe for xfstests is planned. Target tests:
 
 These will replace the current manual functional test sequence and provide
 reproducible results for the kernel submission cover letter.
+
+---
+
+## Dirent Slot Reuse Bug (discovered 2026-04-26)
+
+### Symptom
+
+On an FTRFS v3 image, the following sequence reproduces the bug:
+
+```sh
+mkdir /data/test
+for i in $(seq 1 100); do touch /data/test/file_$i; done
+sync
+rm -rf /data/test
+```
+
+Approximately 80 of the 100 files are removed correctly. The remaining
+~20 produce `rm: No such file or directory` errors despite having been
+created and listed by `ls` immediately before the unlink loop. The
+directory ends up empty (`ls` returns 0 entries) but the directory
+data block keeps its allocated size (28KB+ for 100 entries vs the 4KB
+a single block would suggest), and inode usage shows leaks: subsequent
+attempts to recreate 100 files fail at ENOSPC well before reaching 100.
+
+### Root cause
+
+`ftrfs_del_dirent` zeroes the entire 268-byte dirent struct via
+`memset(de, 0, sizeof(*de))`, including the `d_rec_len` field. The
+scan loops in `dir.c` (`ftrfs_readdir`), `namei.c` (`ftrfs_add_dirent`,
+`ftrfs_del_dirent`, `ftrfs_rmdir` empty-check) used to advance via
+`offset += le16_to_cpu(de->d_rec_len)` and break on `!de->d_rec_len`.
+
+After the first deletion in a block, the zeroed slot becomes an
+opaque hole: every subsequent scan stops at the hole and never sees
+the live entries that follow it within the same block. Symptoms cascade:
+
+- `ftrfs_del_dirent` cannot find files past the hole -> `rm` reports
+  ENOENT for entries that physically exist on disk
+- `ftrfs_add_dirent` cannot reuse free slots past a hole -> wastes a
+  fresh block per N files until `FTRFS_DIRECT_BLOCKS = 12` is exhausted
+- `ftrfs_readdir` may underreport directory contents
+- `ftrfs_rmdir` empty-check may falsely report ENOTEMPTY (or the
+  reverse: report empty when live entries are hidden)
+
+### Fix
+
+FTRFS v3 uses fixed-size dirents (268 bytes packed). The fix advances
+all scan loops by `sizeof(struct ftrfs_dir_entry)` unconditionally and
+identifies free slots solely by `d_ino == 0`. The full block is always
+scanned. `d_rec_len` is preserved as a cosmetic field but no longer
+used for advancement or end-of-scan detection.
+
+A new `BUILD_BUG_ON(sizeof(struct ftrfs_dir_entry) != 268)` in
+`module_init` ensures the assumption holds at compile time.
+
+### Static invariant
+
+`bin/ftrfs-invariants.sh` (in the yocto-hardened layer) ships a
+regression guard: invariant 5 greps `dir.c` and `namei.c` for any
+`if (!.*d_rec_len) ... break;` pattern. A future change that
+re-introduces the bug fails the pre-commit gate.
+
+### Validation
+
+After the fix, the reproducer above completes with zero `rm` errors
+and recreates 100 files successfully on a fresh image. The full
+`bin/hpc-benchmark.sh` cycle (which now invokes `bin/ftrfs-iobench.sh`
+with 10-run statistics across 3 compute nodes) runs end-to-end without
+inode pressure.
+
+### Validation 2026-04-26: research deployment
+
+A second, stronger validation was performed on the new research
+deployment, where FTRFS is no longer mounted from a loopback file
+(`/dev/loop0` <- `/tmp/ftrfs.img`) but from a real virtio block
+device (`/dev/vdb`, 64 MB) on each of the four cluster VMs. The
+rootfs itself is a read-only squashfs (`hpc-arm64-research.bb`),
+so the entire I/O path traversed by the bench is closer to a
+production-shaped deployment than the previous tmpfs-backed setup.
+
+In this configuration:
+
+- The 100-file create + sync + rm reproducer completes with zero
+  ENOENT errors across all three compute nodes.
+- M4 (stat bulk on 100 files) returns a stable median of 0.150 s
+  (stddev 0.007) over 30 samples (10 runs * 3 nodes); pre-fix this
+  metric was unreliable because the dirent scan terminated early
+  on hole, so stat could not reach all entries.
+- The `BUILD_BUG_ON(sizeof(struct ftrfs_dir_entry) != 268)` did
+  not fire at module load on either the master or the three
+  compute nodes.
+- Static invariant `inv5_dirent_no_break_on_zero` passes; full
+  invariant suite (1, 3, 4, 5) was clean before the build.
+
+Reference baseline numbers and architecture context are recorded
+in `yocto-hardened/Documentation/iobench-baseline-2026-04-26.md`.

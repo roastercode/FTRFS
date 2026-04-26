@@ -72,10 +72,14 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 
 		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
-			if (!de->d_rec_len)
-				break;
 
-			/* Skip . and .. — emitted by dir_emit_dots */
+			/*
+			 * Skip free slots (d_ino == 0): never-used trailing
+			 * slots and slots freed by ftrfs_del_dirent. The
+			 * scan must traverse the entire block, not stop at
+			 * the first hole, because live entries may follow
+			 * a deleted entry within the same block.
+			 */
 			if (de->d_ino &&
 			    !(de->d_name_len == 1 && de->d_name[0] == '.') &&
 			    !(de->d_name_len == 2 && de->d_name[0] == '.' &&
@@ -96,7 +100,7 @@ static int ftrfs_readdir(struct file *file, struct dir_context *ctx)
 			}
 
 			entry_slot++;
-			offset += le16_to_cpu(de->d_rec_len);
+			offset += sizeof(struct ftrfs_dir_entry);
 		}
 		brelse(bh);
 
@@ -139,10 +143,12 @@ struct dentry *ftrfs_lookup(struct inode *dir,
 		offset = 0;
 		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
-			if (!de->d_rec_len) {
-				offset += sizeof(*de);
-				continue;
-			}
+			/*
+			 * Skip free slots (d_ino == 0). lookup must traverse
+			 * the entire block, not stop at the first hole, because
+			 * the target entry may follow a deleted entry within
+			 * the same block.
+			 */
 			if (de->d_ino &&
 			    de->d_name_len == dentry->d_name.len &&
 			    !memcmp(de->d_name, dentry->d_name.name,
@@ -154,7 +160,7 @@ struct dentry *ftrfs_lookup(struct inode *dir,
 				inode = ftrfs_iget(sb, ino);
 				return d_splice_alias(inode, dentry);
 			}
-			offset += le16_to_cpu(de->d_rec_len);
+			offset += sizeof(struct ftrfs_dir_entry);
 		}
 		brelse(bh);
 	}

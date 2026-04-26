@@ -558,6 +558,7 @@ static int __init ftrfs_init(void)
 	BUILD_BUG_ON(sizeof(struct ftrfs_super_block) != FTRFS_BLOCK_SIZE);
 	BUILD_BUG_ON(sizeof(struct ftrfs_inode) != 256);
 	BUILD_BUG_ON(sizeof(struct ftrfs_rs_event) != 24);
+	BUILD_BUG_ON(sizeof(struct ftrfs_dir_entry) != 268);
 
 	/* Initialize GF(2^8) tables for RS FEC — once, before any mount */
 	ftrfs_rs_init_tables();

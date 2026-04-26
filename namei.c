@@ -109,7 +109,13 @@ static int ftrfs_add_dirent(struct inode *dir, const struct qstr *name,
 		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
 
-			/* Free slot: ino == 0 */
+			/*
+			 * Free slot: d_ino == 0. Includes never-used trailing
+			 * slots and slots freed by ftrfs_del_dirent. We must
+			 * scan the whole block to find a free slot, even past
+			 * deleted entries; otherwise blocks fill up wastefully
+			 * and ENOSPC strikes early.
+			 */
 			if (!de->d_ino) {
 				de->d_ino       = cpu_to_le64(ino);
 				de->d_name_len  = name->len;
@@ -125,9 +131,7 @@ static int ftrfs_add_dirent(struct inode *dir, const struct qstr *name,
 				mark_inode_dirty(dir);
 				return 0;
 			}
-			offset += le16_to_cpu(de->d_rec_len);
-			if (!de->d_rec_len)
-				break;
+			offset += sizeof(struct ftrfs_dir_entry);
 		}
 		brelse(bh);
 	}
@@ -194,6 +198,11 @@ static int ftrfs_del_dirent(struct inode *dir, const struct qstr *name)
 		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
 
+			/*
+			 * Match target by d_ino != 0 + name compare. Must scan
+			 * the whole block: a previous unlink may have left a
+			 * hole (d_ino == 0) before our target.
+			 */
 			if (de->d_ino &&
 			    de->d_name_len == name->len &&
 			    !memcmp(de->d_name, name->name, name->len)) {
@@ -207,9 +216,7 @@ static int ftrfs_del_dirent(struct inode *dir, const struct qstr *name)
 				return 0;
 			}
 
-			if (!de->d_rec_len)
-				break;
-			offset += le16_to_cpu(de->d_rec_len);
+			offset += sizeof(struct ftrfs_dir_entry);
 		}
 		brelse(bh);
 	}
@@ -413,9 +420,12 @@ static int ftrfs_rmdir(struct inode *dir, struct dentry *dentry)
 		offset = 0;
 		while (offset + sizeof(*de) <= FTRFS_BLOCK_SIZE) {
 			de = (struct ftrfs_dir_entry *)(bh->b_data + offset);
-			if (!de->d_rec_len)
-				break;
 
+			/*
+			 * Skip free slots (d_ino == 0). A directory with a
+			 * hole followed by live entries must NOT be reported
+			 * empty: keep scanning past holes.
+			 */
 			if (de->d_ino &&
 			    !(de->d_name_len == 1 && de->d_name[0] == '.') &&
 			    !(de->d_name_len == 2 && de->d_name[0] == '.'
@@ -423,7 +433,7 @@ static int ftrfs_rmdir(struct inode *dir, struct dentry *dentry)
 				brelse(bh);
 				return -ENOTEMPTY;
 			}
-			offset += le16_to_cpu(de->d_rec_len);
+			offset += sizeof(struct ftrfs_dir_entry);
 		}
 		brelse(bh);
 	}
