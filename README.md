@@ -161,6 +161,53 @@ Validated as a data partition in an arm64 Slurm 25.11.4 cluster built
 with Yocto Styhead (5.1), deployed on KVM/QEMU (cortex-a57, Linux 7.0.0).
 Cluster: 1 master + 3 compute nodes, each with FTRFS on `/data`.
 
+### 2026-04-26 -- research deployment (squashfs + real FTRFS partition)
+
+End-to-end validation on a refactored deployment that closes the
+gap between the prior tmpfs-backed POC and a production-shaped
+configuration:
+
+- **Rootfs**: read-only squashfs (`hpc-arm64-research.bb`, 52 MB)
+  with overlayfs-etc for runtime config writes. Replaces the
+  ext4 + dm-verity stack used in earlier runs.
+- **/data (FTRFS)**: real virtio block device `/dev/vdb` (64 MB),
+  formatted with `mkfs.ftrfs` and mounted via
+  `mount -t ftrfs /dev/vdb /data`. No more loopback file, no more
+  `losetup`. The I/O path traversed by the bench is now the
+  upstream-shape that the kernel.org submission will need to
+  defend.
+- **Dirent fix**: this is the first end-to-end run with the dirent
+  slot reuse fix applied (see `Documentation/testing.md` section
+  "Dirent Slot Reuse Bug"). M4 (stat bulk on 100 files) returns
+  stable values for the first time, where pre-fix the directory
+  scan terminated early on a zeroed dirent and stat could not
+  reach all entries.
+
+| Test                                       | Result |
+|--------------------------------------------|--------|
+| FTRFS module load (4 nodes)                | OK     |
+| mkfs format v3 with superblock parity      | OK scheme=5 |
+| FTRFS mount v3 nominal (4 nodes)           | OK zero RS recovery, zero error |
+| Real partition `/dev/vdb` (not loopback)   | OK     |
+| 100-file create + sync + rm reproducer     | OK zero ENOENT |
+| Job submission latency                     | 0.290s (median, 0.280-0.400) |
+| 3-node parallel job                        | 0.360s |
+| 9-job batch throughput                     | 4.500s |
+| FTRFS write from Slurm job                 | OK     |
+| BUILD_BUG_ON dirent size 268               | did not fire |
+| Static invariant inv5 (dirent break)       | OK     |
+
+I/O metrics (3 compute nodes x 10 runs = 30 samples per metric):
+
+| ID | Metric                       | Min    | Median | Max    | Stddev | Unit    |
+|----|------------------------------|--------|--------|--------|--------|---------|
+| M1 | Write seq + fsync (4MB)      |  4.762 |  5.000 |  5.263 |  0.178 | MB/s    |
+| M2 | Read seq cold (4MB)          | 14.286 | 20.000 | 25.000 |  2.207 | MB/s    |
+| M4 | Stat bulk (100 files)        |  0.140 |  0.150 |  0.170 |  0.007 | seconds |
+| M5 | Small write + fsync (10x64B) | 22.000 | 24.000 | 36.000 |  3.116 | ms/file |
+
+Reference: `yocto-hardened/Documentation/iobench-baseline-2026-04-26.md`
+
 ### 2026-04-26 -- v3 format with stage 3 item 2 (superblock RS FEC)
 
 The v3 superblock format with stage 3 item 2 (CRC32 + RS FEC
