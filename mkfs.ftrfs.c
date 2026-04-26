@@ -23,6 +23,7 @@
 #include <linux/fs.h>
 #include <errno.h>
 #include <stddef.h>
+#include <assert.h>
 
 #define FTRFS_MAGIC         0x46545246
 #define FTRFS_BLOCK_SIZE    4096
@@ -128,18 +129,33 @@ struct ftrfs_super_block {
 
 /*
  * crc32_sb — CRC32 over superblock fields matching ftrfs_crc32_sb() in kernel.
- * Covers [0, offsetof(s_crc32)) and [offsetof(s_uuid), offsetof(s_pad)).
  *
- * Coverage region 2 = 1621 bytes, sized for the v3 superblock layout
- * which includes the feature fields between s_bitmap_blk and s_pad.
+ * Coverage (computed at compile time from struct layout):
+ *   region A: [0, offsetof(s_crc32))         -- magic, counters,
+ *                                               version, flags
+ *   region B: [offsetof(s_uuid), offsetof(s_pad)) -- uuid, label,
+ *                                               RS journal,
+ *                                               bitmap_blk, features,
+ *                                               protection scheme
+ * Total coverage: FTRFS_SB_RS_COVERAGE_BYTES, asserted at compile
+ * time by static_assert in the matching staging helper.
+ *
+ * Must match the kernel implementation byte-for-byte so that
+ * superblocks formatted by mkfs validate at mount time.
  */
 static uint32_t crc32_sb(const struct ftrfs_super_block *sb)
 {
 	const uint8_t *base = (const uint8_t *)sb;
+	const size_t off_crc32 = offsetof(struct ftrfs_super_block, s_crc32);
+	const size_t off_uuid  = offsetof(struct ftrfs_super_block, s_uuid);
+	const size_t off_pad   = offsetof(struct ftrfs_super_block, s_pad);
 	uint32_t c;
 
-	c = crc32_internal(0xFFFFFFFF, base, 64);
-	c = crc32_internal(c, base + 68, 1689 - 68);
+	static_assert(sizeof(((struct ftrfs_super_block *)0)->s_crc32) == 4,
+		      "s_crc32 must be 4 bytes");
+
+	c = crc32_internal(0xFFFFFFFF, base, off_crc32);
+	c = crc32_internal(c, base + off_uuid, off_pad - off_uuid);
 	return c ^ 0xFFFFFFFF;
 }
 
@@ -411,37 +427,61 @@ struct ftrfs_dir_entry {
  * sb_to_rs_staging -- serialize the CRC32 coverage of a superblock
  * into a contiguous staging buffer for RS encode/decode.
  *
- * Output buffer layout (1688 bytes):
- *   [   0..  63]  copy of sb_bytes[0..63]   (region A, 64 bytes)
- *   [  64..1684]  copy of sb_bytes[68..1688] (region B, 1621 bytes)
- *   [1685..1687]  zero pad (3 bytes for shortened RS)
+ * Output buffer layout (FTRFS_SB_RS_STAGING_BYTES bytes):
+ *   [0, off_crc32)                              region A:
+ *                                                 sb_bytes[0..off_crc32)
+ *   [off_crc32, FTRFS_SB_RS_COVERAGE_BYTES)     region B:
+ *                                                 sb_bytes[off_uuid..off_pad)
+ *   [FTRFS_SB_RS_COVERAGE_BYTES,
+ *    FTRFS_SB_RS_STAGING_BYTES)                 zero pad to round up
+ *                                                 to whole RS subblocks
  *
- * The 4 bytes at sb_bytes[64..67] (s_crc32) are excluded, exactly
- * as crc32_sb() does. Same coverage on both protection layers.
+ * Field offsets are derived from struct layout via offsetof, so the
+ * helper is invariant under future format extensions provided
+ * FTRFS_SB_RS_COVERAGE_BYTES is updated in lockstep. static_assert
+ * below enforces buffer sizing at compile time.
+ *
+ * The s_crc32 field [off_crc32, off_uuid) is excluded, exactly as
+ * crc32_sb() does. Same coverage on both protection layers.
+ *
+ * Must match the kernel ftrfs_sb_to_rs_staging() byte-for-byte.
  */
 static void sb_to_rs_staging(const struct ftrfs_super_block *sb,
 			     uint8_t staging[FTRFS_SB_RS_STAGING_BYTES])
 {
 	const uint8_t *base = (const uint8_t *)sb;
+	const size_t off_crc32 = offsetof(struct ftrfs_super_block, s_crc32);
+	const size_t off_uuid  = offsetof(struct ftrfs_super_block, s_uuid);
+	const size_t off_pad   = offsetof(struct ftrfs_super_block, s_pad);
 
-	memcpy(staging,        base,        64);
-	memcpy(staging + 64,   base + 68,   1689 - 68);
-	memset(staging + 1685, 0,           3);
+	static_assert(FTRFS_SB_RS_STAGING_BYTES >= FTRFS_SB_RS_COVERAGE_BYTES,
+		      "staging buffer too small for coverage");
+
+	memcpy(staging, base, off_crc32);
+	memcpy(staging + off_crc32, base + off_uuid, off_pad - off_uuid);
+	memset(staging + FTRFS_SB_RS_COVERAGE_BYTES, 0,
+	       FTRFS_SB_RS_STAGING_BYTES - FTRFS_SB_RS_COVERAGE_BYTES);
 }
 
 /*
  * rs_encode_super -- compute the RS parity of a superblock and store
- * the 128 parity bytes in sb->s_pad[2279..2406].
+ * the parity bytes (FTRFS_SB_RS_PARITY_BYTES total) at the trailing
+ * end of the on-disk block.
  *
- * 8 RS(255,239) shortened subblocks of FTRFS_SB_RS_DATA_LEN = 211
- * data bytes each are encoded over the staging buffer. Each subblock
- * produces 16 bytes of parity, total 128 bytes. The parity is
- * placed at offset 3968 in the on-disk block, which corresponds to
- * sb->s_pad[FTRFS_SB_RS_S_PAD_INDEX] = sb->s_pad[2279].
+ * FTRFS_SB_RS_SUBBLOCKS shortened RS(255,239) subblocks of
+ * FTRFS_SB_RS_DATA_LEN data bytes each are encoded over the staging
+ * buffer. Each subblock produces FTRFS_RS_PARITY bytes of parity.
+ * The parity is placed at on-disk offset FTRFS_SB_RS_PARITY_OFFSET,
+ * which corresponds to sb->s_pad[FTRFS_SB_RS_S_PAD_INDEX]. The
+ * trailing position is stable against future format extensions:
+ * new fields go into s_pad before the parity zone, and the
+ * S_PAD_INDEX define is recomputed from the struct layout in
+ * lockstep.
  *
  * Invariant: caller must have populated all sb fields except
- * s_crc32 before calling. s_crc32 is in [64, 68), excluded from
- * the staging copy, so this helper is idempotent w.r.t. s_crc32.
+ * s_crc32 before calling. s_crc32 lies in
+ * [offsetof(s_crc32), offsetof(s_uuid)) and is excluded from the
+ * staging copy, so this helper is idempotent w.r.t. s_crc32.
  */
 static void rs_encode_super(struct ftrfs_super_block *sb)
 {

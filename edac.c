@@ -233,26 +233,39 @@ __u32 ftrfs_crc32(const void *buf, size_t len)
  * ftrfs_crc32_sb -- compute CRC32 over the meaningful regions of the
  *                   superblock, excluding s_crc32 itself and s_pad.
  *
- * Coverage:
- *   [0, offsetof(s_crc32))               = 64 bytes
- *   [offsetof(s_uuid), offsetof(s_pad))  = 1621 bytes
+ * Coverage (computed at compile time from struct layout):
+ *   region A: [0, offsetof(s_crc32))         -- magic, counters,
+ *                                               version, flags
+ *   region B: [offsetof(s_uuid), offsetof(s_pad)) -- uuid, label,
+ *                                               RS journal,
+ *                                               bitmap_blk, features,
+ *                                               protection scheme
+ * Total coverage: FTRFS_SB_RS_COVERAGE_BYTES, asserted at build time
+ * by BUILD_BUG_ON below.
  *
  * Chained via crc32_le without intermediate XOR. Must match the
- * userspace mkfs.ftrfs implementation byte-for-byte so that
- * superblocks formatted by mkfs validate at mount time.
+ * userspace mkfs.ftrfs::crc32_sb() byte-for-byte so that superblocks
+ * formatted by mkfs validate at mount time.
  *
- * The v3 format extension (commit 2ec4cb4) added 28 bytes of
- * feature fields between s_bitmap_blk and s_pad; the second
- * coverage region is sized to include them. v2 superblocks
- * predating that extension are correctly rejected by the
- * resulting CRC mismatch.
+ * On-disk format compatibility: superblocks produced by an mkfs whose
+ * struct layout differs from this kernel's (e.g. older v2 images
+ * predating the v3 feature-field extension) are correctly rejected by
+ * the resulting CRC mismatch.
  */
 __u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb)
 {
 	const u8 *base = (const u8 *)fsb;
+	const size_t off_crc32 = offsetof(struct ftrfs_super_block, s_crc32);
+	const size_t off_uuid  = offsetof(struct ftrfs_super_block, s_uuid);
+	const size_t off_pad   = offsetof(struct ftrfs_super_block, s_pad);
 	u32 c;
 
-	c = crc32_le(0xFFFFFFFF, base, 64);
-	c = crc32_le(c, base + 68, 1689 - 68);
+	BUILD_BUG_ON(sizeof_field(struct ftrfs_super_block, s_crc32) != 4);
+	BUILD_BUG_ON(off_uuid != off_crc32 + 4);
+	BUILD_BUG_ON(off_crc32 + (off_pad - off_uuid) !=
+		     FTRFS_SB_RS_COVERAGE_BYTES);
+
+	c = crc32_le(0xFFFFFFFF, base, off_crc32);
+	c = crc32_le(c, base + off_uuid, off_pad - off_uuid);
 	return c ^ 0xFFFFFFFF;
 }

@@ -175,12 +175,21 @@ static const struct super_operations ftrfs_super_ops = {
  * ftrfs_sb_to_rs_staging -- serialize the CRC32-covered region of a
  * superblock into a contiguous staging buffer for RS encode/decode.
  *
- * Output buffer layout (1688 bytes):
- *   [   0..  63]  copy of sb_bytes[0..63]   (region A, 64 bytes)
- *   [  64..1684]  copy of sb_bytes[68..1688] (region B, 1621 bytes)
- *   [1685..1687]  zero pad (3 bytes for shortened RS)
+ * Output buffer layout (FTRFS_SB_RS_STAGING_BYTES bytes):
+ *   [0, off_crc32)                              region A:
+ *                                                 sb_bytes[0..off_crc32)
+ *   [off_crc32, FTRFS_SB_RS_COVERAGE_BYTES)     region B:
+ *                                                 sb_bytes[off_uuid..off_pad)
+ *   [FTRFS_SB_RS_COVERAGE_BYTES,
+ *    FTRFS_SB_RS_STAGING_BYTES)                 zero pad to round up
+ *                                                 to whole RS subblocks
  *
- * The 4 bytes at sb_bytes[64..67] (s_crc32) are excluded, exactly as
+ * Field offsets are derived from struct layout via offsetof, so the
+ * helper is invariant under future format extensions provided
+ * FTRFS_SB_RS_COVERAGE_BYTES is updated in lockstep. BUILD_BUG_ON
+ * below enforces that consistency at compile time.
+ *
+ * The s_crc32 field [off_crc32, off_uuid) is excluded, exactly as
  * ftrfs_crc32_sb() does. Same coverage on both protection layers.
  *
  * Must match mkfs.ftrfs.c::sb_to_rs_staging() byte-for-byte.
@@ -189,17 +198,28 @@ static void ftrfs_sb_to_rs_staging(const struct ftrfs_super_block *sb,
 				   u8 staging[FTRFS_SB_RS_STAGING_BYTES])
 {
 	const u8 *base = (const u8 *)sb;
+	const size_t off_crc32 = offsetof(struct ftrfs_super_block, s_crc32);
+	const size_t off_uuid  = offsetof(struct ftrfs_super_block, s_uuid);
+	const size_t off_pad   = offsetof(struct ftrfs_super_block, s_pad);
 
-	memcpy(staging,        base,        64);
-	memcpy(staging + 64,   base + 68,   1689 - 68);
-	memset(staging + 1685, 0,           3);
+	BUILD_BUG_ON(off_crc32 + (off_pad - off_uuid) !=
+		     FTRFS_SB_RS_COVERAGE_BYTES);
+	BUILD_BUG_ON(FTRFS_SB_RS_STAGING_BYTES <
+		     FTRFS_SB_RS_COVERAGE_BYTES);
+
+	memcpy(staging, base, off_crc32);
+	memcpy(staging + off_crc32, base + off_uuid, off_pad - off_uuid);
+	memset(staging + FTRFS_SB_RS_COVERAGE_BYTES, 0,
+	       FTRFS_SB_RS_STAGING_BYTES - FTRFS_SB_RS_COVERAGE_BYTES);
 }
 
 /*
  * ftrfs_sb_from_rs_staging -- inverse of ftrfs_sb_to_rs_staging.
  * Restores the (possibly RS-corrected) bytes from staging back onto
- * the superblock, leaving s_crc32 (bytes [64..67]) untouched. The
- * 3 trailing zero-pad bytes of staging are not copied back.
+ * the superblock, leaving s_crc32 (bytes [off_crc32, off_uuid))
+ * untouched. The trailing zero-pad bytes of staging
+ * [FTRFS_SB_RS_COVERAGE_BYTES, FTRFS_SB_RS_STAGING_BYTES) are not
+ * copied back.
  *
  * Used on the mount-time RS recovery path in ftrfs_fill_super.
  */
@@ -207,9 +227,15 @@ static void ftrfs_sb_from_rs_staging(const u8 staging[FTRFS_SB_RS_STAGING_BYTES]
 				     struct ftrfs_super_block *sb)
 {
 	u8 *base = (u8 *)sb;
+	const size_t off_crc32 = offsetof(struct ftrfs_super_block, s_crc32);
+	const size_t off_uuid  = offsetof(struct ftrfs_super_block, s_uuid);
+	const size_t off_pad   = offsetof(struct ftrfs_super_block, s_pad);
 
-	memcpy(base,        staging,        64);
-	memcpy(base + 68,   staging + 64,   1689 - 68);
+	BUILD_BUG_ON(off_crc32 + (off_pad - off_uuid) !=
+		     FTRFS_SB_RS_COVERAGE_BYTES);
+
+	memcpy(base, staging, off_crc32);
+	memcpy(base + off_uuid, staging + off_crc32, off_pad - off_uuid);
 }
 
 void ftrfs_dirty_super(struct ftrfs_sb_info *sbi)
@@ -531,6 +557,7 @@ static int __init ftrfs_init(void)
 	/* Verify on-disk structure sizes at compile time */
 	BUILD_BUG_ON(sizeof(struct ftrfs_super_block) != FTRFS_BLOCK_SIZE);
 	BUILD_BUG_ON(sizeof(struct ftrfs_inode) != 256);
+	BUILD_BUG_ON(sizeof(struct ftrfs_rs_event) != 24);
 
 	/* Initialize GF(2^8) tables for RS FEC — once, before any mount */
 	ftrfs_rs_init_tables();

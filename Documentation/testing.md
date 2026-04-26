@@ -73,12 +73,106 @@ for the full procedure.
 | FTRFS write from Slurm job   | ✅       |
 | 0 BUG/WARN/Oops              | ✅       |
 
+### Results (2026-04-26, kernel 7.0, arm64 KVM/QEMU, post-refactor 4a)
+
+Pre-commit refactor of SB serialization to offsetof + BUILD_BUG_ON +
+static_assert (commit 4a). On-disk format unchanged (v3). Behaviour
+unchanged. syzkaller stopped on host before this run; see Test load
+context section below.
+
+| Test                         | Result   |
+|------------------------------|----------|
+| Job submission latency (×3)  | ~0.30s   |
+| 3-node parallel job          | 0.33s    |
+| 9-job batch throughput       | 4.49s    |
+| FTRFS mount (4 nodes)        | zero RS errors ✅ |
+| FTRFS write from Slurm job   | ✅       |
+| 0 BUG/WARN/Oops              | ✅       |
+
+### Test load context
+
+The benchmark host runs alongside other workloads; reported throughput
+varies meaningfully with background load. Two baselines are tracked:
+
+- **Loaded baseline (historic, syzkaller running)**: 9-job throughput
+  ~5.77s, tolerance band [4.6, 6.9] (±20%). Used while syzkaller was
+  fuzzing the host kernel continuously. Archived for reference.
+- **Unloaded baseline (current, syzkaller stopped 2026-04-26)**: 9-job
+  throughput ~4.49s, tolerance band [3.6, 5.4] (±20%). This is the
+  current pre-push regression target.
+
+When syzkaller is restarted, switch back to the loaded band and note
+the change in the commit message.
+
 Note: QEMU TCG (software emulation) dominates latency. Results reflect
 the emulated cortex-a57 environment, not bare metal.
 
 Note: The shell in the Yocto image is BusyBox `/bin/sh`. Bash-specific
 syntax (`for i in $(seq ...)`) is not supported. Use explicit background
 jobs with `wait` instead.
+
+---
+
+## Pre-commit Invariants
+
+A layered validation pipeline is enforced before each commit and push.
+
+### Static invariants (`bin/ftrfs-invariants.sh`)
+
+Located in the `yocto-hardened` layer. Runs in seconds, no VM required.
+Checks:
+
+1. No SB-related magic numbers (64, 68, 1685, 1688, 1689, 1621) remain
+   in the five SB serialization functions across edac.c, super.c, and
+   mkfs.ftrfs.c. After commit 4a, these functions use `offsetof` and
+   the `FTRFS_SB_RS_*` defines exclusively.
+2. mkfs produces a well-formed superblock: magic at offset 0, non-zero
+   CRC32 at offset 64, non-zero RS parity at offset 3968.
+3. The built `ftrfs.ko` exports the expected T (text) symbols.
+
+### Combined validation (`bin/ftrfs-validate.sh`)
+
+Chains `ftrfs-invariants.sh` (fast, static) then `hpc-benchmark.sh`
+(slower, dynamic cluster bench). Use as the canonical pre-push gate:
+
+```sh
+ftrfs-validate.sh && git push
+```
+
+If invariants fail, the benchmark is not run -- fixing invariants
+always takes priority over performance regressions.
+
+### Pre-commit hook (`tools/checkpatch-precommit.sh`)
+
+Runs the upstream Linux kernel style checker (`scripts/checkpatch.pl --strict`)
+on staged C files before allowing a commit. Catches style drift and
+well-known bug patterns (uninitialized stack variables, missing
+endianness conversions, locking imbalance, etc.).
+
+Installation:
+
+```sh
+cd ~/git/ftrfs
+ln -sf ../../tools/checkpatch-precommit.sh .git/hooks/pre-commit
+```
+
+The hook locates the checker in this order:
+1. `/usr/src/linux/scripts/checkpatch.pl` (Gentoo, follows current kernel)
+2. `tools/checkpatch.pl` (frozen local copy, optional)
+
+Bypass (use sparingly, never on push):
+
+```sh
+git commit --no-verify
+```
+
+### Audit rationale
+
+A layered static-then-dynamic validation pipeline is the recommended
+pattern for safety-critical software (DO-178C 6.4.3, IEC 61508-3
+7.4.6). Static checks catch class-of-bug issues cheaply; dynamic
+checks catch behavioural regressions. The combination provides
+defence in depth against both code drift and runtime regressions.
 
 ---
 

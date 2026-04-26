@@ -261,6 +261,12 @@ sudo mount -t ftrfs test.img /mnt
 
 ---
 
+
+## Development
+
+Run `tools/checkpatch-precommit.sh` before committing — it runs `checkpatch.pl --strict` on staged C files and rejects the commit on any warning.
+
+---
 ## RFC Thread
 
 Submitted to `linux-fsdevel@vger.kernel.org`:
