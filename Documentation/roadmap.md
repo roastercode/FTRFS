@@ -493,6 +493,101 @@ threat-model 2.3.
 
 ---
 
+## Userspace tooling integration (TODO)
+
+For FTRFS to be a first-class filesystem in the Linux ecosystem
+and a credible candidate for upstream submission to kernel.org,
+the userspace tooling layer needs work beyond the kernel module
+and the standalone `mkfs.ftrfs` binary. The following items are
+tracked here as long-term tooling deliverables; none of them is
+a blocker for current research deployment, but each one is
+required for production-grade adoption.
+
+### parted
+
+`parted` does not currently know about FTRFS as a filesystem
+type. A partition formatted with FTRFS shows up as `unknown`
+in `parted print` and cannot be created with `mkpart` using a
+fs-type argument of `ftrfs`. Two approaches:
+
+1. Submit a patch to GNU parted (`libparted/fs/`) registering
+   FTRFS as a known fs-type with its magic word and offset.
+2. Until the patch lands upstream, ship a parted-ftrfs.patch
+   in this repository for downstream consumers to apply.
+
+Option 1 is the long-term play and the one that gives FTRFS
+visibility in the GNU/Linux toolchain.
+
+### util-linux (blkid, lsblk, wipefs)
+
+`blkid` is the canonical mechanism by which userspace tools
+(udev, mount, fstab, systemd, parted) identify the filesystem
+on a block device. The signature lives in
+`util-linux/libblkid/src/superblocks/`. A new
+`superblocks/ftrfs.c` is required, registering:
+
+- The FTRFS magic word `FTRF` at byte offset 0
+- The version field for `format_version` reporting
+- The UUID field for `UUID=` mount syntax
+- The label field if/when FTRFS gains volume labels
+
+Once `blkid` recognises FTRFS, `lsblk -f`, `mount UUID=...`,
+`wipefs`, and udev rules all work transparently. This is the
+single most impactful upstream patch for end-user adoption.
+
+### fsck.ftrfs
+
+A repair tool that can:
+
+- Walk the inode bitmap and the inode table to detect
+  inconsistencies
+- Verify CRC32 on every inode and superblock copy
+- Run RS FEC decode on damaged regions and report which
+  blocks were corrected
+- Detect and repair the dirent slot reuse class of bugs
+  (cross-reference with the testing.md regression test)
+- Operate read-only by default; `--repair` only after
+  explicit consent
+
+`fsck.ftrfs` is invoked automatically by `fsck` from
+util-linux when the filesystem type is FTRFS, provided the
+binary is named `/sbin/fsck.ftrfs` per the fsck(8) convention.
+
+### mount(8) integration
+
+`mount -t ftrfs` already works because the kernel module
+registers the filesystem type. What is missing:
+
+- An `fstab(5)` entry pattern documented in this repo
+- A udev rule to auto-mount FTRFS partitions detected by
+  blkid (once the blkid integration above lands)
+- Cleaner error messages on mount failure (currently relies
+  on dmesg)
+
+### Yocto layer integration
+
+`meta-yocto-hardened-hpc` already ships `ftrfs-module`,
+`mkfs-ftrfs`, and `ftrfsd`. Adding:
+
+- A `wic` plugin or kickstart fragment so Yocto images can
+  declare FTRFS partitions natively in their `.wks` files
+- A `dm-verity`-equivalent for FTRFS (the RS FEC layer is
+  already there at the FS level, but a verified-boot story
+  would tie FTRFS to the trusted-boot chain)
+
+### Argument for kernel.org submission
+
+When the patch series is submitted to fsdevel and linux-kernel,
+one of the standard reviewer questions is *"is there userspace
+tooling support? does blkid recognise it? does parted work?
+is there an fsck?"*. Having concrete answers (`yes, patch
+series N for util-linux, patch series M for parted, fsck.ftrfs
+in this tree`) is what separates a research POC from a
+submittable filesystem. The work tracked here is the path from
+one to the other.
+
+---
+
 ## Document maintenance
 
 This roadmap is updated at each stage closure. The update
