@@ -34,6 +34,43 @@
 /* On-disk bitmap block layout (RS FEC protected) */
 #define FTRFS_BITMAP_SUBBLOCKS  16   /* subblocks per bitmap block */
 #define FTRFS_BITMAP_DATA_BYTES (FTRFS_BITMAP_SUBBLOCKS * FTRFS_SUBBLOCK_DATA) /* 3824 */
+
+/*
+ * Superblock RS layout (stage 3 item 2).
+ *
+ * The superblock CRC32 covers two non-contiguous regions:
+ *   region A  [0, 64)        = 64 bytes (header + counters + version + flags)
+ *   region B  [68, 1689)     = 1621 bytes (uuid + label + RS journal +
+ *                              bitmap_blk + features + protection scheme)
+ *   total                   = 1685 logical bytes
+ *   excluded: s_crc32 itself in [64, 68).
+ *
+ * RS protection covers exactly the same 1685 logical bytes. The two
+ * regions are serialized into a contiguous 1688-byte staging buffer
+ * (3 bytes of zero pad to round up to 8 shortened subblocks of 211
+ * data bytes each). RS(255,239) shortened with data_len=211 is the
+ * standard lib/reed_solomon usage; padding is implicit.
+ *
+ * Each of the 8 subblocks tolerates up to 8 symbol errors
+ * independently (RS_PARITY/2 = 16/2 = 8). Total correction capacity
+ * across the superblock: 64 symbol errors when distributed across
+ * subblocks. MIL-STD-882E favourable: 8 independent failure-
+ * correctable regions.
+ *
+ * The 128 bytes of parity (8 * 16) live at sb->s_pad[2279..2406],
+ * which corresponds to disk offset 1689 + 2279 = 3968 -- the last
+ * 128 bytes of the 4096-byte superblock. This trailing position is
+ * stable against future format evolution: new fields go into s_pad
+ * before the parity zone.
+ */
+#define FTRFS_SB_RS_COVERAGE_BYTES  1685   /* logical bytes (CRC32 range) */
+#define FTRFS_SB_RS_STAGING_BYTES   1688   /* 8 * FTRFS_SB_RS_DATA_LEN    */
+#define FTRFS_SB_RS_DATA_LEN        211    /* per shortened subblock      */
+#define FTRFS_SB_RS_SUBBLOCKS       8      /* total subblocks             */
+#define FTRFS_SB_RS_PARITY_BYTES    128    /* 8 * FTRFS_RS_PARITY         */
+#define FTRFS_SB_RS_PARITY_OFFSET   3968   /* end of 4096-byte block      */
+#define FTRFS_SB_RS_S_PAD_INDEX     (FTRFS_SB_RS_PARITY_OFFSET - 1689)
+                                          /* index in s_pad[]: 2279     */
 #define FTRFS_BITMAP_MAX_BLOCKS (FTRFS_BITMAP_DATA_BYTES * 8) /* 30592 */
 
 /* Filesystem limits */

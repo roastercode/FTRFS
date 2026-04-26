@@ -36,6 +36,16 @@
 #define FTRFS_BITMAP_SUBBLOCKS 16
 #define FTRFS_BITMAP_DATA_BYTES (FTRFS_BITMAP_SUBBLOCKS * FTRFS_SUBBLOCK_DATA)
 
+/* Superblock RS layout (stage 3 item 2, must match kernel ftrfs.h) */
+#define FTRFS_SB_RS_COVERAGE_BYTES  1685   /* logical bytes (CRC32 range) */
+#define FTRFS_SB_RS_STAGING_BYTES   1688   /* 8 * FTRFS_SB_RS_DATA_LEN    */
+#define FTRFS_SB_RS_DATA_LEN        211    /* per shortened subblock      */
+#define FTRFS_SB_RS_SUBBLOCKS       8      /* total subblocks             */
+#define FTRFS_SB_RS_PARITY_BYTES    128    /* 8 * FTRFS_RS_PARITY         */
+#define FTRFS_SB_RS_PARITY_OFFSET   3968   /* end of 4096-byte block      */
+#define FTRFS_SB_RS_S_PAD_INDEX     (FTRFS_SB_RS_PARITY_OFFSET - 1689)
+                                          /* index in s_pad[]: 2279     */
+
 /* Format version (must match kernel ftrfs.h) */
 #define FTRFS_VERSION_V3        3
 
@@ -133,6 +143,91 @@ static uint32_t crc32_sb(const struct ftrfs_super_block *sb)
 	return c ^ 0xFFFFFFFF;
 }
 
+
+/*
+ * encode_rs_userspace -- single-subblock RS(255,239) shortened encoder.
+ *
+ * Exact reproduction of lib/reed_solomon encode_rs8() with parameters:
+ *   init_rs(8, 0x187, fcr=0, prim=1, nroots=16)
+ *
+ * @data:     input data bytes (data_len)
+ * @data_len: number of data bytes (must be in [1, 239])
+ * @parity:   output parity (16 bytes)
+ *
+ * The kernel encode_rs8 supports shortened codes natively for any
+ * data_len <= 239: the unwritten bytes are mathematically padded
+ * with zero, no special handling needed in the LFSR.
+ *
+ * Used by rs_encode_super (data_len=211). rs_encode_bitmap (data_len=239)
+ * and rs_encode_inode (data_len=172) carry their own LFSR copies for
+ * historical reasons; they will converge here in a follow-up cleanup.
+ */
+static void encode_rs_userspace(const uint8_t *data, size_t data_len,
+				uint8_t *parity)
+{
+	/*
+	 * GF(2^8) with primitive polynomial 0x187, primitive element
+	 * alpha=1, fcr=0, nroots=16. Tables built lazily on first call.
+	 */
+	static uint8_t alpha_to[256], index_of[256];
+	static uint8_t genpoly[17];
+	static int     rs_table_init = 0;
+	uint8_t        par[16];
+	size_t         i;
+
+	if (!rs_table_init) {
+		unsigned int sr = 1, j;
+		for (j = 0; j < 256; j++) {
+			alpha_to[j] = sr;
+			index_of[sr] = j;
+			sr <<= 1;
+			if (sr & 0x100)
+				sr ^= 0x187;
+			sr &= 0xff;
+		}
+		index_of[0] = 255;
+
+		/* Build genpoly: prod_{r=fcr..fcr+nroots-1} (x - alpha^r) */
+		genpoly[0] = 1;
+		for (j = 0; j < 16; j++) {
+			unsigned int k;
+			genpoly[j + 1] = 1;
+			for (k = j; k > 0; k--) {
+				if (genpoly[k] != 0)
+					genpoly[k] = genpoly[k - 1] ^
+						alpha_to[(index_of[genpoly[k]] + j) % 255];
+				else
+					genpoly[k] = genpoly[k - 1];
+			}
+			genpoly[0] = alpha_to[(index_of[genpoly[0]] + j) % 255];
+		}
+		/* Convert to index form for encoder */
+		for (j = 0; j <= 16; j++)
+			genpoly[j] = index_of[genpoly[j]];
+
+		rs_table_init = 1;
+	}
+
+	memset(par, 0, sizeof(par));
+
+	for (i = 0; i < data_len; i++) {
+		uint8_t feedback = index_of[data[i] ^ par[0]];
+		unsigned int j;
+
+		if (feedback != 255) {
+			for (j = 0; j < 15; j++)
+				par[j] = par[j + 1] ^
+					alpha_to[(feedback + genpoly[15 - j]) % 255];
+			par[15] = alpha_to[(feedback + genpoly[0]) % 255];
+		} else {
+			for (j = 0; j < 15; j++)
+				par[j] = par[j + 1];
+			par[15] = 0;
+		}
+	}
+
+	memcpy(parity, par, 16);
+}
 
 /*
  * rs_encode_bitmap — protect 239-byte subblocks with 16-byte RS parity.
@@ -312,6 +407,57 @@ struct ftrfs_dir_entry {
 	char     d_name[FTRFS_MAX_FILENAME + 1];
 } __attribute__((packed));
 
+/*
+ * sb_to_rs_staging -- serialize the CRC32 coverage of a superblock
+ * into a contiguous staging buffer for RS encode/decode.
+ *
+ * Output buffer layout (1688 bytes):
+ *   [   0..  63]  copy of sb_bytes[0..63]   (region A, 64 bytes)
+ *   [  64..1684]  copy of sb_bytes[68..1688] (region B, 1621 bytes)
+ *   [1685..1687]  zero pad (3 bytes for shortened RS)
+ *
+ * The 4 bytes at sb_bytes[64..67] (s_crc32) are excluded, exactly
+ * as crc32_sb() does. Same coverage on both protection layers.
+ */
+static void sb_to_rs_staging(const struct ftrfs_super_block *sb,
+			     uint8_t staging[FTRFS_SB_RS_STAGING_BYTES])
+{
+	const uint8_t *base = (const uint8_t *)sb;
+
+	memcpy(staging,        base,        64);
+	memcpy(staging + 64,   base + 68,   1689 - 68);
+	memset(staging + 1685, 0,           3);
+}
+
+/*
+ * rs_encode_super -- compute the RS parity of a superblock and store
+ * the 128 parity bytes in sb->s_pad[2279..2406].
+ *
+ * 8 RS(255,239) shortened subblocks of FTRFS_SB_RS_DATA_LEN = 211
+ * data bytes each are encoded over the staging buffer. Each subblock
+ * produces 16 bytes of parity, total 128 bytes. The parity is
+ * placed at offset 3968 in the on-disk block, which corresponds to
+ * sb->s_pad[FTRFS_SB_RS_S_PAD_INDEX] = sb->s_pad[2279].
+ *
+ * Invariant: caller must have populated all sb fields except
+ * s_crc32 before calling. s_crc32 is in [64, 68), excluded from
+ * the staging copy, so this helper is idempotent w.r.t. s_crc32.
+ */
+static void rs_encode_super(struct ftrfs_super_block *sb)
+{
+	uint8_t staging[FTRFS_SB_RS_STAGING_BYTES];
+	uint8_t *parity_dst = sb->s_pad + FTRFS_SB_RS_S_PAD_INDEX;
+	unsigned int i;
+
+	sb_to_rs_staging(sb, staging);
+
+	for (i = 0; i < FTRFS_SB_RS_SUBBLOCKS; i++) {
+		encode_rs_userspace(staging + i * FTRFS_SB_RS_DATA_LEN,
+				    FTRFS_SB_RS_DATA_LEN,
+				    parity_dst + i * FTRFS_RS_PARITY);
+	}
+}
+
 static void write_block(int fd, uint64_t block, const void *buf)
 {
 	off_t off = (off_t)block * FTRFS_BLOCK_SIZE;
@@ -476,6 +622,15 @@ int main(int argc, char *argv[])
 	sb.s_feat_incompat  = 0;
 	sb.s_feat_ro_compat = 0;
 	sb.s_data_protection_scheme = FTRFS_DATA_PROTECTION_INODE_UNIVERSAL;
+
+	/*
+	 * Stage 3 item 2: encode RS parity over the CRC32-covered region
+	 * before computing the CRC. The parity sits in s_pad which is
+	 * outside the CRC32 coverage; the order RS-first vs CRC-last
+	 * does not affect the s_crc32 value, but is the convention
+	 * mirrored on the kernel side (ftrfs_dirty_super in commit C).
+	 */
+	rs_encode_super(&sb);
 	sb.s_crc32          = crc32_sb(&sb);
 
 	write_block(fd, 0, &sb);
