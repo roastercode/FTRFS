@@ -109,54 +109,198 @@ Identity in the Fulcio cert: `aurelien.desbrieres@gmail.com`,
 issuer `https://github.com/login/oauth`, validity 2026-04-26
 00:08:01 - 00:18:01 UTC.
 
+### Note: latent superblock writeback bug (discovered later)
+
+A latent defect in the on-disk superblock writeback path,
+present since the start of the project but masked by the
+absence of mutation+remount test cycles, was discovered while
+implementing stage 3 item 1 and resolved in commit ee6b6ae as
+part of that work. It is recorded here under stage 2 because
+the affected code (`ftrfs_log_rs_event`, the four `alloc.c`
+free-counter mutators) was already present at the v0.2.0
+release. Two distinct symptoms:
+
+  - `s_crc32` was not recomputed after any superblock mutation,
+    so the on-disk superblock checksum drifted out of sync. The
+    next remount failed with "superblock CRC32 mismatch".
+  - `s_free_blocks` and `s_free_inodes` were updated in the
+    in-memory `sbi->s_ftrfs_sb` but never copied onto the
+    buffer head before `mark_buffer_dirty(sbi->s_sbh)`. The
+    counters were silently lost across umount/remount.
+
+Resolution: a centralized helper `ftrfs_dirty_super(sbi)` in
+`super.c` propagates the in-memory authoritative copy onto the
+buffer head, refreshes `s_crc32` via `ftrfs_crc32_sb`, mirrors
+the new `s_crc32` back to the in-memory copy, and marks the
+buffer dirty. All five mutation sites (`ftrfs_log_rs_event` +
+4 alloc paths) call the helper instead of `mark_buffer_dirty`
+directly. Validated runtime in qemuarm64: counters persist
+across remount, and a remount after RS correction now
+succeeds.
+
+This trace is kept per MIL-STD-882E hazard-tracking practice:
+every failure mode discovered during development is recorded
+with its resolution, even when the resolution lands in a later
+stage.
+
 ---
 
 ## Stage 3 — Metadata hardening
 
-**Status:** ACTIVE (next stage).
+**Status:** ACTIVE.
 
 This stage closes three normative gaps recorded in
-`known-limitations.md` section 2 against threat-model section 6.
+`known-limitations.md` section 2 against threat-model section 6,
+plus one behavioural defect from known-limitations 3.5. Each
+gap is tracked as a numbered item with its own status; items
+are sequenced so that earlier ones do not depend on later ones
+but later ones may consume artefacts of earlier ones.
 
-### Exit conditions
+### Item 1 — Universal inode RS protection (CLOSED 2026-04-26)
 
-1. **Unconditional inode RS protection** (threat-model 6.1, 6.3).
-   The `FTRFS_INODE_FL_RS_ENABLED` gating flag is retired. RS FEC
-   covers all inodes by default, with parity in the existing
-   `i_reserved[0..15]`. The flag's prior semantic
-   (per-inode opt-in for data-block FEC) is dropped from the
-   threat model anyway and survives only as the legacy
-   `s_data_protection_scheme = INODE_OPT_IN` enum value, which
-   is marked deprecated and not produced by mkfs going forward.
+**Threat model reference:** 6.1 (no opt-in), 6.3 (correction not
+just detection) for the inode case.
+**Commits:**
+- FTRFS `ee6b6ae ftrfs: stage 3 item 1 -- universal inode RS protection (scheme 5)`
+- yocto-hardened `aaa1cca ftrfs: sync layer sources from FTRFS HEAD ee6b6ae`
 
-2. **Superblock RS correction** (threat-model 6.3).
-   The superblock today has CRC32 detection only; corruption leads
-   to mount failure. Stage 3 introduces RS protection so the
-   superblock is correctable in place. Two design candidates:
-   per-superblock RS in the existing `s_pad` region (no layout
-   change), or a backup superblock at a fixed late offset with
-   RS over the pair (layout change, requires v4 format bump).
-   Decision recorded in the stage-3 design note before
-   implementation.
+A new value `FTRFS_DATA_PROTECTION_INODE_UNIVERSAL = 5` is added
+to the `s_data_protection_scheme` enum (`FTRFS_DATA_PROTECTION_MAX`
+bumped accordingly). mkfs writes scheme=5 going forward.
+v0.1.0 / v0.2.0 images that carry scheme=1 INODE_OPT_IN remain
+mountable on a stage-3 kernel; the kernel dispatches on the scheme
+to decide whether the per-inode RS path is exercised. Block layout
+unchanged from v3, no v4 format bump.
 
-3. **Shannon entropy in RS journal** (threat-model 6.4).
-   Reclassified as Must-have by the threat model section 8 §1
-   rationale. Each `ftrfs_rs_event` records a per-correction
-   entropy estimate (a small u8 or u16 in the journal-head
-   padding or a reused field of `re_error_bits`). Entropy is the
-   forensic discriminator between Family A (Poisson background)
-   and Family B (correlated burst).
+The legacy `FTRFS_INODE_FL_RS_ENABLED` flag is preserved as a bit
+definition for backward compatibility; the kernel no longer
+consults it. The macros `FTRFS_INODE_RS_DATA` (172) and
+`FTRFS_INODE_RS_PAR` (16) become live: parity goes into
+`i_reserved[0..15]`, the rest of `i_reserved` is forced to zero.
 
-### Behavioural defect closed in this stage
+Read path: CRC32 verification first, RS decode only on CRC fail
+when scheme is `INODE_UNIVERSAL`. After successful correction the
+kernel re-verifies CRC32 against the corrected buffer, logs the
+event to the Radiation Event Journal, writes the corrected inode
+back to disk, and emits a `pr_warn`. This ordering avoids the
+decoder on the fast path (>99 % of reads) and avoids the rare
+risk of an SEU on the parity bytes inducing a false correction
+on otherwise-valid data.
 
-4. **`ftrfs_rs_decode` return convention** (known-limitations 3.5).
-   Today returns 0/`-EBADMSG`; the symbol count is dropped. As a
-   consequence, the Radiation Event Journal does not log bitmap
-   corrections that did occur (the `if (rc > 0)` test in
-   `ftrfs_setup_bitmap` never matches). Fixed by the option (1)
-   of known-limitations 3.5: return the corrected symbol count
-   on success, propagate to all callers, and feed the count into
-   the entropy estimate from item 3 above.
+Write path: RS parity recomputed on every inode write after the
+CRC32 field is set. Helpers `ftrfs_rs_encode` and `ftrfs_rs_decode`
+in `edac.c` were generalized to accept a `size_t len` argument so
+the same two functions serve the bitmap subblock path
+(len = 239) and the inode path (len = 172). lib/reed_solomon
+supports shortened RS codes natively.
+
+Validated end-to-end on qemuarm64 with kernel 7.0: clean mount,
+write/umount/remount cycle preserves counters, single-bit flip
+on inode 2 triggers RS recovery + log event + corrected
+writeback, subsequent remount succeeds, dmesg clean.
+
+### Item 2 — Superblock RS correction (ACTIVE)
+
+**Threat model reference:** 6.3 (correction not just detection)
+for the superblock case.
+
+The superblock today (v0.2.0+, including stage 3 item 1) has
+CRC32 detection only; corruption causes mount failure. This item
+adds Reed-Solomon FEC covering the same byte range as
+`ftrfs_crc32_sb` (`[0, 1689)`), so a corrupted superblock is
+correctable in place at mount.
+
+#### Design
+
+- **RS coverage:** `[0, 1689)` (mirror of CRC32 coverage).
+- **Subblock decomposition:** 8 RS(255,239) shortened codewords.
+  Gives 64 symbols of correction capacity total (8 per codeword),
+  strictly superior to a single shortened RS code on the full
+  range (8 symbols total). Coherent with the existing bitmap
+  pattern. MIL-STD-882E favourable: 8 independent
+  failure-correctable regions vs 1 single point.
+- **Parity placement:** offset 3968 in the 4096-byte superblock
+  (last 128 bytes of `s_pad`, `4096 - 8 * 16 = 3968`). Chosen
+  for stability against future format evolution: new fields go
+  before the parity in `s_pad`.
+- **No format bump:** layout stays v3. `s_pad` was already 2407
+  bytes, the 128-byte parity fits with margin.
+- **Backward compat:** v0.1.0 / v0.2.0 images mount cleanly
+  because the parity zone (zeros on those images) is never
+  consulted as long as CRC32 passes. On those images, a
+  corruption breaking CRC32 still causes a mount failure as
+  before -- no regression.
+
+#### Implementation plan (3 atomic commits A/B/C)
+
+- **Commit A -- RS region helpers in `edac.c`.**
+  Factor the "encode N subblocks of len bytes from a buffer"
+  pattern into two helpers: `ftrfs_rs_encode_region(buf,
+  region_len, subblock_count, parity_offset)` and
+  `ftrfs_rs_decode_region(...)`. The bitmap path in `alloc.c`
+  is refactored to use them. No on-disk change, no runtime
+  change on the bitmap (same RS calls, just extracted into a
+  function). Test: bitmap functional unchanged.
+
+- **Commit B -- Superblock RS layout, mkfs side.**
+  Constants `FTRFS_SB_RS_OFFSET = 3968` and
+  `FTRFS_SB_RS_SUBBLOCKS = 8` in `ftrfs.h`. `mkfs.ftrfs.c`
+  encodes 8 RS subblocks on the superblock after `crc32_sb`
+  and writes the parity at offset 3968. No kernel decode yet:
+  mount continues to fail on CRC fail. Test: mkfs produces a
+  superblock whose parity zone is no longer zero; mount on
+  fresh image still OK (CRC32 valid, RS never consulted).
+
+- **Commit C -- Stage 3 item 2 closure: kernel decode + dirty_super.**
+  `ftrfs_dirty_super` extended to encode RS parity on every
+  superblock mutation (before the CRC32 recompute).
+  `ftrfs_fill_super` adds, after the CRC32 check, the RS
+  recovery path: on CRC fail, decode RS, re-verify CRC, log
+  RS event on block 0, mark dirty for writeback. Update
+  `design.md`, `known-limitations.md` (KL 6.3 second half
+  marked implemented), `README.md`. Tag
+  `v0.3.0-metadata-hardening` expected **after** items 3
+  and 4 are also closed.
+
+### Item 3 — Fix `ftrfs_rs_decode` return convention (PENDING)
+
+**Reference:** known-limitations 3.5.
+
+Today `ftrfs_rs_decode` returns 0 (success, regardless of
+whether corrections occurred) or `-EBADMSG` (uncorrectable).
+The symbol count produced by `decode_rs8` is dropped. As a
+consequence, the bitmap correction path in
+`alloc.c::ftrfs_setup_bitmap` tests `if (rc > 0)` to identify
+a correction event -- that branch never matches under the
+current decoder semantics.
+
+Fix per option (1) of known-limitations 3.5: return the symbol
+count on success, keep `-EBADMSG` for uncorrectable. Propagate
+to all callers (bitmap subblock loop in `alloc.c`, inode RS
+path in `inode.c`, superblock RS path from item 2). The new
+return contract is the prerequisite for item 4 (entropy uses
+the count).
+
+### Item 4 — Shannon entropy in RS journal (PENDING)
+
+**Threat model reference:** 6.4 (tamper-evident journal).
+Reclassified as Must-have by threat-model section 8 §1.
+
+Each `ftrfs_rs_event` records a per-correction entropy estimate.
+Three placement candidates evaluated when the work begins:
+- High bits of `re_error_bits` (32-bit field, only low 4 bits
+  carry the symbol count which is bounded by 8). No layout
+  change.
+- Padding bytes adjacent to `s_rs_journal_head` in the superblock.
+- A reuse of an unused field in the existing 24-byte event entry.
+
+Entropy is the forensic discriminator between Family A
+(Poisson background) and Family B (correlated burst). Computed
+on the symbol pattern returned by item 3's new return contract.
+
+### Sanity tests for stage 3 closure
+
+In addition to the standard validation chain
 
 ### Sanity tests for stage 3 closure
 
