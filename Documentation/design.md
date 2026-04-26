@@ -151,7 +151,8 @@ produces a value above the enum maximum and is rejected by the
 mount-time range check.
 
 In v3, mkfs writes value 1 (`INODE_OPT_IN`). Stages 3 and 4 of the
-staged plan (see `RAF.md`) introduce the universal schemes.
+staged plan (see `Documentation/roadmap.md`) introduce the
+universal schemes.
 
 ---
 
