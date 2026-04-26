@@ -94,12 +94,9 @@ int ftrfs_setup_bitmap(struct super_block *sb)
 
 	/*
 	 * Decode each RS(255,239) subblock via the region helper. The
-	 * results[] array holds the per-subblock decode outcome so the
-	 * caller can log RS journal events for corrected and
-	 * uncorrectable cases. ftrfs_rs_decode currently returns 0 on
-	 * success regardless of the symbol count (known-limitations 3.5);
-	 * the rc > 0 branch below remains in place for when the return
-	 * convention is fixed in stage 3 item 3.
+	 * results[] array holds the per-subblock decode outcome for
+	 * the RS journal: < 0 uncorrectable, = 0 no errors,
+	 * > 0 number of corrected symbols.
 	 */
 	{
 		int rs_results[FTRFS_BITMAP_SUBBLOCKS];

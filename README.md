@@ -101,6 +101,7 @@ before v4 resubmission.
 | Data protection scheme (s_data_protection_scheme) | ✅ implemented |
 | ftrfs_crc32_sb defined in edac.c             | ✅ fixed       |
 | lib/reed_solomon API (uint8_t *data)         | ✅ fixed       |
+| RS decoder return convention (symbol count)  | ✅ fixed       |
 | mkfs parity matches lib/reed_solomon         | ✅ validated   |
 | mkfs -N <inodes> option                      | ✅ implemented |
 | Single indirect block (~2 MiB per file)      | ✅ implemented |

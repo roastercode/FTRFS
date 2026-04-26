@@ -93,7 +93,7 @@ on-disk bitmap, with 16 sub-blocks of 239 bytes each addressing
 will be silently formatted with a bitmap that under-represents the
 addressable space.
 
-### 3.5 Semantic mismatch in `ftrfs_rs_decode` return convention
+### 3.5 Semantic mismatch in `ftrfs_rs_decode` return convention (RESOLVED 2026-04-26)
 
 `edac.c::ftrfs_rs_decode` returns 0 on success (corrected or clean)
 and `-EBADMSG` on uncorrectable failure. The number of symbols
@@ -117,6 +117,17 @@ fixes are possible:
 
 Option (1) is preferred because it provides the symbol count
 needed for the entropy estimate (constraint 6.4).
+
+**Resolution (stage 3 item 3, 2026-04-26)**: Option (1) implemented.
+`ftrfs_rs_decode` now returns the corrected symbol count on success
+(`> 0`), `0` if no errors were detected, or a negative `errno` on
+uncorrectable. `ftrfs_rs_decode_region` propagates the same convention
+through the per-subblock `results[]` array. Existing callers were
+updated: `inode.c::ftrfs_iget` now passes the actual symbol count to
+`ftrfs_log_rs_event` (previously hardcoded to `0`), and the
+`alloc.c::ftrfs_setup_bitmap` `rc > 0` branch is now reachable as
+intended. Logging of superblock RS recoveries to the journal remains
+deferred to a later item.
 
 This finding is recorded here for the first time; it was identified
 during the architectural review that produced `threat-model.md`.

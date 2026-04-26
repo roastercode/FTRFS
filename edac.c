@@ -101,11 +101,11 @@ int ftrfs_rs_encode(uint8_t *data, size_t len, uint8_t *parity)
  * @len:    number of data bytes (must match the length passed to encode)
  * @parity: parity bytes (FTRFS_RS_PARITY)
  *
- * Returns 0 if no errors detected, -EBADMSG if uncorrectable (more
- * than FTRFS_RS_PARITY/2 symbol errors). The current implementation
- * does not yet propagate the corrected symbol count; that is the
- * subject of known-limitations 3.5 and a separate follow-up commit
- * within stage 3.
+ * Returns:
+ *   < 0  uncorrectable: -EBADMSG on RS uncorrectable (more than
+ *        FTRFS_RS_PARITY/2 symbol errors), -EINVAL on bad input.
+ *   = 0  no errors detected, no correction needed.
+ *   > 0  number of symbol errors that were corrected in place.
  */
 int ftrfs_rs_decode(uint8_t *data, size_t len, uint8_t *parity)
 {
@@ -133,7 +133,7 @@ int ftrfs_rs_decode(uint8_t *data, size_t len, uint8_t *parity)
 		return -EBADMSG;
 	}
 
-	return 0;
+	return nerr;
 }
 
 /*
@@ -182,10 +182,9 @@ int ftrfs_rs_encode_region(u8 *data_buf, size_t data_stride,
  * across a region. Symmetric to ftrfs_rs_encode_region.
  *
  * @results:       optional, n_subblocks entries. On exit each
- *                 entry holds the result of ftrfs_rs_decode for
- *                 the corresponding subblock (0 on success today,
- *                 negative for uncorrectable; the symbol-count
- *                 return is pending known-limitations 3.5 fix).
+ *                 entry holds the return value of ftrfs_rs_decode
+ *                 for the corresponding subblock: < 0 uncorrectable,
+ *                 = 0 no errors, > 0 number of corrected symbols.
  *                 Pass NULL to skip per-subblock reporting.
  *
  * Returns 0 if every subblock decoded successfully, the first

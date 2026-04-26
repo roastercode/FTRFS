@@ -104,9 +104,10 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 			return ERR_PTR(-EIO);
 		}
 
-		ftrfs_log_rs_event(sb, (u64)ino, 0);
+		ftrfs_log_rs_event(sb, (u64)ino, (u32)nerr);
 		mark_buffer_dirty(bh);
-		pr_warn("ftrfs: inode %lu corrected by RS FEC\n", ino);
+		pr_warn("ftrfs: inode %lu corrected by RS FEC (%d symbols)\n",
+			ino, nerr);
 	}
 
 	fi = FTRFS_I(inode);
