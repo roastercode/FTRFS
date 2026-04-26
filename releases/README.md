@@ -77,6 +77,7 @@ The expected identity differs per release. See the table below.
 | Tag                    | Signer identity                          | OIDC issuer                            |
 |------------------------|------------------------------------------|----------------------------------------|
 | `v0.1.0-baseline`      | `aurelien.desbrieres@gmail.com`          | `https://github.com/login/oauth`       |
+| `v0.2.0-format-stable` | `aurelien.desbrieres@gmail.com`          | `https://github.com/login/oauth`       |
 
 The signer identity for `v0.1.0-baseline` corresponds to the maintainer's
 GitHub OAuth primary email at the time of signing. Subsequent releases
@@ -96,6 +97,22 @@ cosign verify-blob releases/ftrfs-v0.1.0-baseline.tar.gz \
     --certificate-identity 'aurelien.desbrieres@gmail.com' \
     --certificate-oidc-issuer 'https://github.com/login/oauth'
 ```
+
+For `v0.2.0-format-stable`:
+
+```sh
+cosign verify-blob releases/ftrfs-v0.2.0-format-stable.tar.gz \
+    --bundle releases/ftrfs-v0.2.0-format-stable.tar.gz.sigstore.json \
+    --certificate-identity 'aurelien.desbrieres@gmail.com' \
+    --certificate-oidc-issuer 'https://github.com/login/oauth' \
+    --new-bundle-format
+```
+
+The `--new-bundle-format` flag is required because the v0.2.0 bundle was
+written by `cosign sign-blob --new-bundle-format` (Sigstore bundle
+format v0.3, JSON layout). The v0.1.0 bundle uses the legacy format and
+does not require the flag. Expected SHA-256 of the regenerated tarball:
+`19a196d18f9506c8f9ff149208ee03f2c9267aac674de3f7c1ba8c225a7684f2`.
 
 A successful verification prints `Verified OK` and exits with status
 zero. Any other output indicates a verification failure that must be
@@ -169,3 +186,26 @@ so that:
 This transition does not invalidate the `v0.1.0-baseline` signature.
 That signature remains verifiable using the identity in the table
 above.
+
+---
+
+## Note on the `v0.2.0-format-stable` signature
+
+This release was signed with cosign 3.0.3 using the device authorization
+flow (`--fulcio-auth-flow=device`) instead of the default
+localhost-callback browser flow. The default flow had failed on the
+maintainer's workstation due to Firefox/DBus issues under the Sway
+compositor: the cosign process opened a browser window for the OIDC
+authorization but never received the localhost callback after the user
+had authenticated, leaving the signing operation hanging indefinitely.
+
+Device flow resolves this by displaying a verification code in the
+terminal and a URL to enter it from any browser, including a phone or
+another machine, with no localhost callback involved. The signing
+identity recorded in Rekor is the same as for `v0.1.0-baseline` (the
+maintainer's GitHub OAuth primary email), so verification commands
+continue to use the same identity values.
+
+The longer-term plan to migrate to a workflow-bound identity from a
+GitHub Actions release pipeline remains as stated in the note on the
+`v0.1.0-baseline` signature above.
