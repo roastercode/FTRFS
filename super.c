@@ -171,6 +171,47 @@ static const struct super_operations ftrfs_super_ops = {
  * Caller MUST hold sbi->s_lock so that the snapshot copied to the
  * buffer head is taken atomically with respect to other writers.
  */
+/*
+ * ftrfs_sb_to_rs_staging -- serialize the CRC32-covered region of a
+ * superblock into a contiguous staging buffer for RS encode/decode.
+ *
+ * Output buffer layout (1688 bytes):
+ *   [   0..  63]  copy of sb_bytes[0..63]   (region A, 64 bytes)
+ *   [  64..1684]  copy of sb_bytes[68..1688] (region B, 1621 bytes)
+ *   [1685..1687]  zero pad (3 bytes for shortened RS)
+ *
+ * The 4 bytes at sb_bytes[64..67] (s_crc32) are excluded, exactly as
+ * ftrfs_crc32_sb() does. Same coverage on both protection layers.
+ *
+ * Must match mkfs.ftrfs.c::sb_to_rs_staging() byte-for-byte.
+ */
+static void ftrfs_sb_to_rs_staging(const struct ftrfs_super_block *sb,
+				   u8 staging[FTRFS_SB_RS_STAGING_BYTES])
+{
+	const u8 *base = (const u8 *)sb;
+
+	memcpy(staging,        base,        64);
+	memcpy(staging + 64,   base + 68,   1689 - 68);
+	memset(staging + 1685, 0,           3);
+}
+
+/*
+ * ftrfs_sb_from_rs_staging -- inverse of ftrfs_sb_to_rs_staging.
+ * Restores the (possibly RS-corrected) bytes from staging back onto
+ * the superblock, leaving s_crc32 (bytes [64..67]) untouched. The
+ * 3 trailing zero-pad bytes of staging are not copied back.
+ *
+ * Used on the mount-time RS recovery path in ftrfs_fill_super.
+ */
+static void ftrfs_sb_from_rs_staging(const u8 staging[FTRFS_SB_RS_STAGING_BYTES],
+				     struct ftrfs_super_block *sb)
+{
+	u8 *base = (u8 *)sb;
+
+	memcpy(base,        staging,        64);
+	memcpy(base + 68,   staging + 64,   1689 - 68);
+}
+
 void ftrfs_dirty_super(struct ftrfs_sb_info *sbi)
 {
 	struct ftrfs_super_block *fsb;
@@ -187,6 +228,18 @@ void ftrfs_dirty_super(struct ftrfs_sb_info *sbi)
 	 * fsb; this memcpy serializes them onto disk.
 	 */
 	memcpy(fsb, sbi->s_ftrfs_sb, sizeof(*fsb));
+
+	/* Encode RS parity over CRC32-covered region (skipping s_crc32). */
+	{
+		u8 staging[FTRFS_SB_RS_STAGING_BYTES];
+		u8 *parity_dst = (u8 *)fsb + FTRFS_SB_RS_PARITY_OFFSET;
+
+		ftrfs_sb_to_rs_staging(fsb, staging);
+		ftrfs_rs_encode_region(staging, FTRFS_SB_RS_DATA_LEN,
+				       parity_dst, FTRFS_RS_PARITY,
+				       FTRFS_SB_RS_DATA_LEN,
+				       FTRFS_SB_RS_SUBBLOCKS);
+	}
 
 	crc = ftrfs_crc32_sb(fsb);
 	fsb->s_crc32 = cpu_to_le32(crc);
@@ -279,9 +332,34 @@ int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	/* Verify CRC32 of superblock (excluding the crc32 field itself) */
 	crc = ftrfs_crc32_sb(fsb);
 	if (crc != le32_to_cpu(fsb->s_crc32)) {
-		errorf(fc, "ftrfs: superblock CRC32 mismatch (got 0x%08x, expected 0x%08x)",
-		       crc, le32_to_cpu(fsb->s_crc32));
-		goto out_brelse;
+		u8 staging[FTRFS_SB_RS_STAGING_BYTES];
+		u8 *parity_src = (u8 *)fsb + FTRFS_SB_RS_PARITY_OFFSET;
+		int rs_results[FTRFS_SB_RS_SUBBLOCKS];
+		int rc;
+
+		pr_warn("ftrfs: superblock CRC32 mismatch (got 0x%08x, expected 0x%08x), attempting RS recovery\n",
+			crc, le32_to_cpu(fsb->s_crc32));
+
+		ftrfs_sb_to_rs_staging(fsb, staging);
+		rc = ftrfs_rs_decode_region(staging, FTRFS_SB_RS_DATA_LEN,
+					    parity_src, FTRFS_RS_PARITY,
+					    FTRFS_SB_RS_DATA_LEN,
+					    FTRFS_SB_RS_SUBBLOCKS,
+					    rs_results);
+		if (rc < 0) {
+			errorf(fc, "ftrfs: superblock CRC32 mismatch and RS uncorrectable");
+			goto out_brelse;
+		}
+
+		ftrfs_sb_from_rs_staging(staging, fsb);
+
+		crc = ftrfs_crc32_sb(fsb);
+		if (crc != le32_to_cpu(fsb->s_crc32)) {
+			errorf(fc, "ftrfs: superblock CRC32 still mismatch after RS recovery");
+			goto out_brelse;
+		}
+
+		pr_warn("ftrfs: superblock corrected by RS FEC\n");
 	}
 
 	/*

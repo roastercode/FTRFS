@@ -89,6 +89,13 @@ covers 28 more bytes than v2 wrote into the parity computation), and is
 correctly rejected at mount time. There is no version-detection logic
 beyond this; the CRC32 mismatch is the version barrier.
 
+Since stage 3 item 2, a CRC32 mismatch on a v3 superblock is no longer
+fatal: the mount path attempts RS FEC recovery before failing. See
+"Superblock RS FEC" below for layout and recovery semantics. A v2
+superblock will still be rejected because v2 does not write the v3
+parity zone, so the RS decode fails and the mount path falls through
+to `-EIO` as before.
+
 ---
 
 ## Format versions
@@ -145,6 +152,66 @@ range-checks it at mount and refuses values above
 | 3     | `FTRFS_DATA_PROTECTION_UNIVERSAL_SHADOW` | (Reserved) RS parity stored in a dedicated out-of-band region. |
 | 4     | `FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT` | (Reserved) RS parity attached as an extent-based filesystem attribute. |
 | 5     | `FTRFS_DATA_PROTECTION_INODE_UNIVERSAL`  | RS FEC on all inodes unconditionally; no FEC on data blocks yet. Stage 3 baseline. |
+
+### Superblock RS FEC (independent of `s_data_protection_scheme`)
+
+Stage 3 item 2 adds a Reed-Solomon FEC layer over the superblock,
+independent of the per-data-block enum above. It applies to every
+v3 image regardless of `s_data_protection_scheme` value, and protects
+the same byte range that CRC32 covers (regions A and B, totaling 1685
+authoritative bytes; see "Superblock CRC32" above).
+
+Layout:
+
+- 8 shortened RS(255,239) sub-blocks, 211 data bytes each, packed
+  contiguously into a 1688-byte staging buffer (8 x 211 = 1688). The
+  staging is built by `ftrfs_sb_to_rs_staging()` from the on-disk
+  superblock as `[0..64) || [68..1689)` plus 3 zero-pad bytes.
+- 16 parity bytes per sub-block, totaling 128 parity bytes, stored at
+  offset 3968 of the 4 KiB superblock block (in the `s_pad[]` tail,
+  index `FTRFS_SB_RS_S_PAD_INDEX = 2279`). The parity zone does not
+  overlap any authoritative field.
+
+Mount-time behavior (`ftrfs_fill_super`):
+
+1. Read superblock, compute CRC32, compare to `s_crc32`.
+2. If CRC32 matches: continue (no RS path traversed).
+3. If CRC32 mismatches: invoke `ftrfs_rs_decode_region()` on the
+   staging buffer with the parity zone as input. RS(255,239) shortened
+   corrects up to 8 byte errors per sub-block (64 byte errors total
+   across the 8 sub-blocks), provided no single sub-block exceeds 8
+   errors.
+4. On RS success: `ftrfs_sb_from_rs_staging()` writes corrected bytes
+   back over `[0..64)` and `[68..1689)`, leaving `s_crc32` untouched;
+   CRC32 is then recomputed and re-verified. On match, mount continues
+   and `pr_warn("ftrfs: superblock corrected by RS FEC")` is logged.
+5. On RS failure or post-recovery CRC32 mismatch: mount fails
+   (`-EIO`) and the corruption is logged via `errorf(fc, ...)`.
+
+Mutation-time behavior (`ftrfs_dirty_super`):
+
+Every superblock mutation (e.g., bitmap counter update, RS journal
+event append) goes through `ftrfs_dirty_super()`, which now:
+
+1. Propagates the in-memory authoritative copy onto the buffer head.
+2. Builds the staging buffer via `ftrfs_sb_to_rs_staging()`.
+3. Encodes the 128 parity bytes via `ftrfs_rs_encode_region()` and
+   writes them to the parity zone.
+4. Recomputes CRC32 over the same coverage and stores it at offset
+   64.
+
+Order is parity-then-CRC32 so that both protection layers are
+mathematically computed over the identical staging input, with no
+dependency between them.
+
+Persistence after recovery: when a corrupted superblock is corrected
+at mount, the in-memory copy is correct but the on-disk image still
+holds the pre-correction byte. The corrected state is persisted on
+the next `ftrfs_dirty_super()` call (typically the first metadata
+mutation post-mount, e.g., a bitmap update on first allocation). A
+mount immediately followed by a clean umount with no metadata
+mutation will leave the on-disk corruption in place; the next mount
+will retrigger the same RS recovery path.
 
 The choice of `__le32` (4 bytes) over `__u8` (1 byte) is a structural
 sentinel: any single-byte SEU on the three high-order zero bytes
