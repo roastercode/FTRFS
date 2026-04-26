@@ -61,25 +61,33 @@ void ftrfs_rs_exit_tables(void)
 }
 
 /*
- * ftrfs_rs_encode — encode FTRFS_SUBBLOCK_DATA bytes, produce parity
- * @data:   input data (FTRFS_SUBBLOCK_DATA bytes)
+ * ftrfs_rs_encode — encode @len data bytes, produce FTRFS_RS_PARITY parity
+ * @data:   input data (@len bytes, must be <= FTRFS_SUBBLOCK_DATA)
+ * @len:    number of data bytes (FTRFS_SUBBLOCK_DATA for the bitmap path,
+ *          FTRFS_INODE_RS_DATA for inodes, etc.)
  * @parity: output parity (FTRFS_RS_PARITY bytes)
  *
- * lib/reed_solomon works with uint16_t arrays (symbols). We expand
- * each byte to uint16_t before encoding, then truncate back to uint8_t.
+ * lib/reed_solomon supports shortened RS codes natively: passing a
+ * length less than FTRFS_SUBBLOCK_DATA produces a valid codeword,
+ * mathematically equivalent to padding the data with zeros up to the
+ * full subblock length. The same length must be passed to the matching
+ * ftrfs_rs_decode call.
+ *
  * The kernel encode_rs8 API takes uint8_t *data directly; parity is
  * returned via a uint16_t *par buffer (low byte holds the parity symbol).
  */
-int ftrfs_rs_encode(uint8_t *data, uint8_t *parity)
+int ftrfs_rs_encode(uint8_t *data, size_t len, uint8_t *parity)
 {
 	uint16_t par[FTRFS_RS_PARITY];
 	int i;
 
 	if (!ftrfs_rs_ctrl)
 		return -EINVAL;
+	if (len > FTRFS_SUBBLOCK_DATA)
+		return -EINVAL;
 
 	memset(par, 0, sizeof(par));
-	encode_rs8(ftrfs_rs_ctrl, data, FTRFS_SUBBLOCK_DATA, par, 0);
+	encode_rs8(ftrfs_rs_ctrl, data, len, par, 0);
 
 	for (i = 0; i < FTRFS_RS_PARITY; i++)
 		parity[i] = (uint8_t)par[i];
@@ -88,19 +96,25 @@ int ftrfs_rs_encode(uint8_t *data, uint8_t *parity)
 }
 
 /*
- * ftrfs_rs_decode — decode and correct a RS(255,239) codeword in place
- * @data:   data bytes (FTRFS_SUBBLOCK_DATA), corrected in place on success
+ * ftrfs_rs_decode — decode and correct a shortened RS codeword in place
+ * @data:   data bytes (@len bytes), corrected in place on success
+ * @len:    number of data bytes (must match the length passed to encode)
  * @parity: parity bytes (FTRFS_RS_PARITY)
  *
- * Returns 0 if no errors or errors corrected successfully,
- * -EBADMSG if uncorrectable (more than FTRFS_RS_PARITY/2 symbol errors).
+ * Returns 0 if no errors detected, -EBADMSG if uncorrectable (more
+ * than FTRFS_RS_PARITY/2 symbol errors). The current implementation
+ * does not yet propagate the corrected symbol count; that is the
+ * subject of known-limitations 3.5 and a separate follow-up commit
+ * within stage 3.
  */
-int ftrfs_rs_decode(uint8_t *data, uint8_t *parity)
+int ftrfs_rs_decode(uint8_t *data, size_t len, uint8_t *parity)
 {
 	uint16_t par[FTRFS_RS_PARITY];
 	int i, nerr;
 
 	if (!ftrfs_rs_ctrl)
+		return -EINVAL;
+	if (len > FTRFS_SUBBLOCK_DATA)
 		return -EINVAL;
 
 	for (i = 0; i < FTRFS_RS_PARITY; i++)
@@ -110,11 +124,12 @@ int ftrfs_rs_decode(uint8_t *data, uint8_t *parity)
 	 * decode_rs8 takes uint8_t *data and corrects in place. No
 	 * temporary buffer or post-decode copy-back is needed.
 	 */
-	nerr = decode_rs8(ftrfs_rs_ctrl, data, par, FTRFS_SUBBLOCK_DATA,
+	nerr = decode_rs8(ftrfs_rs_ctrl, data, par, len,
 			  NULL, 0, NULL, 0, NULL);
 
 	if (nerr < 0) {
-		pr_err_ratelimited("ftrfs: RS block uncorrectable\n");
+		pr_err_ratelimited("ftrfs: RS block uncorrectable (len=%zu)\n",
+				   len);
 		return -EBADMSG;
 	}
 

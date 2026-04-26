@@ -87,7 +87,7 @@ before v4 resubmission.
 |----------------------------------------------|----------------|
 | Superblock mount/umount                      | ✅ implemented |
 | Inode read/write with CRC32                  | ✅ implemented |
-| RS FEC on inode metadata                     | ✅ implemented |
+| RS FEC on inode metadata (universal, stage 3)| ✅ implemented |
 | Directory read/lookup/create                 | ✅ implemented |
 | File read/write (iomap path)                 | ✅ implemented |
 | Block and inode allocator                    | ✅ implemented |

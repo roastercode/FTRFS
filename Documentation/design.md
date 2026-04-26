@@ -144,15 +144,22 @@ range-checks it at mount and refuses values above
 | 2     | `FTRFS_DATA_PROTECTION_UNIVERSAL_INLINE` | (Reserved) RS parity bytes embedded inline within each data block. |
 | 3     | `FTRFS_DATA_PROTECTION_UNIVERSAL_SHADOW` | (Reserved) RS parity stored in a dedicated out-of-band region. |
 | 4     | `FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT` | (Reserved) RS parity attached as an extent-based filesystem attribute. |
+| 5     | `FTRFS_DATA_PROTECTION_INODE_UNIVERSAL`  | RS FEC on all inodes unconditionally; no FEC on data blocks yet. Stage 3 baseline. |
 
 The choice of `__le32` (4 bytes) over `__u8` (1 byte) is a structural
 sentinel: any single-byte SEU on the three high-order zero bytes
 produces a value above the enum maximum and is rejected by the
 mount-time range check.
 
-In v3, mkfs writes value 1 (`INODE_OPT_IN`). Stages 3 and 4 of the
-staged plan (see `Documentation/roadmap.md`) introduce the
-universal schemes.
+Stage 3 (mkfs from v0.3.0+) writes value 5 (`INODE_UNIVERSAL`):
+all inodes are RS-protected at format time and on every
+subsequent write, the superblock is RS-protected, and the RS
+journal records per-correction Shannon entropy. The legacy
+value 1 (`INODE_OPT_IN`) remains in the enum and is accepted
+by stage-3 kernels read-only on v0.1.0/v0.2.0 baseline images,
+but mkfs no longer emits it. Stage 4 (see
+`Documentation/roadmap.md`) introduces the universal data-block
+schemes (values 2, 3, 4).
 
 ---
 
@@ -236,10 +243,26 @@ Verified on every `ftrfs_iget()`, updated on every `ftrfs_write_inode_raw()`.
 
 ### Inode RS FEC
 
-When `FTRFS_INODE_FL_RS_ENABLED` is set:
+Under `s_data_protection_scheme = INODE_UNIVERSAL` (stage 3+),
+every inode is RS-protected unconditionally. The legacy
+`FTRFS_INODE_FL_RS_ENABLED` flag is retained in the bit
+definition for backward compatibility with v0.1.0 / v0.2.0
+images but is no longer set by mkfs and not consulted by the
+kernel.
+
 - **Protected**: 172 bytes (`offsetof(i_reserved)`)
 - **Parity**: 16 bytes in `i_reserved[0..15]`
 - **Zeroed**: `i_reserved[16..83]` always zero
+
+Read path: CRC32 verification first; if and only if CRC32
+fails AND scheme is `INODE_UNIVERSAL`, RS decode is invoked
+in place. After a successful correction the kernel re-verifies
+CRC32 against the corrected buffer and writes the corrected
+inode back to disk; the event is logged to the Radiation
+Event Journal. See `inode.c::ftrfs_iget`.
+
+Write path: RS parity is recomputed on every inode write
+after the CRC32 field is set. See `namei.c::ftrfs_write_inode_raw`.
 
 ---
 

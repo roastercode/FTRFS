@@ -44,7 +44,7 @@ of subsequent development stages.
 |--------------------------|-------------------------------|
 | 6.1 Universal data block protection (no opt-in) | Not implemented. RS FEC currently protects the on-disk allocation bitmap and, optionally, individual inodes flagged with `FTRFS_INODE_FL_RS_ENABLED`. Data blocks themselves are not protected. |
 | 6.2 Burst tolerance through stripe geometry | Not implemented. The bitmap uses 16 RS(255,239) sub-blocks packed within a single 4 KiB block, with no cross-block parity distribution. A burst exceeding 8 symbols within one 256-byte sub-block is uncorrectable in the current design. |
-| 6.3 Unconditional inode RS protection | Code present, semantics are per-inode opt-in via `FTRFS_INODE_FL_RS_ENABLED`. The threat model elevates this to mandatory; the gating flag is to be removed and protection applied to all inodes. |
+| 6.3 Unconditional inode RS protection | Implemented in stage 3 (v0.3.0+). All inodes are RS-protected unconditionally under `s_data_protection_scheme = INODE_UNIVERSAL`. The legacy `FTRFS_INODE_FL_RS_ENABLED` flag is preserved in the bit definition for backward compatibility but is no longer functional. |
 | 6.3 Superblock RS correction | Not implemented. The superblock has CRC32 detection only. Corruption of the superblock currently leads to mount failure, not to in-place correction. |
 | 6.4 Shannon entropy in RS journal | Not implemented. The `ftrfs_rs_event` structure records block number, timestamp, error symbol count, and per-entry CRC32, but not an entropy estimate. Distinguishing Family A (Poisson background) from Family B (correlated burst) post-event is therefore presently inferential rather than recorded.|
 | 6.5 Bounded auditable code size | Currently met. Total source approximately 2700 lines kernel-side; the 5000-line target leaves margin for the items above plus planned features. |
@@ -59,13 +59,15 @@ where the code does not crash or misbehave in observed runs but
 where the behavior is either ambiguous, defensive coverage is
 missing, or dead code remains in tree.
 
-### 3.1 Dead or unused declarations in `ftrfs.h`
+### 3.1 Dead or unused declarations in `ftrfs.h` (RESOLVED stage 3)
 
-`FTRFS_INODE_FL_RS_ENABLED`, `FTRFS_INODE_RS_DATA`, and
-`FTRFS_INODE_RS_PAR` are defined but only `FTRFS_INODE_FL_RS_ENABLED`
-has a referenced semantic, and per the threat model that semantic
-is to be retired. The macros must either be wired into a real
-behavior or removed.
+`FTRFS_INODE_RS_DATA` and `FTRFS_INODE_RS_PAR` are now used by
+`namei.c::ftrfs_write_inode_raw` and `inode.c::ftrfs_iget` to
+compute and verify per-inode RS parity under the
+`INODE_UNIVERSAL` scheme. `FTRFS_INODE_FL_RS_ENABLED` is
+retained as a deprecated bit definition, documented in
+`ftrfs.h`, for backward compatibility with v0.1.0 / v0.2.0
+images that may have set it. New images do not set it.
 
 ### 3.2 Inode number leak in `ftrfs_create` error path
 

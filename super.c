@@ -158,6 +158,44 @@ static const struct super_operations ftrfs_super_ops = {
 };
 
 /*
+ * ftrfs_dirty_super - propagate the authoritative in-memory superblock
+ * (sbi->s_ftrfs_sb) onto the buffer head, recompute s_crc32, and mark
+ * the buffer dirty for writeback.
+ *
+ * Every site that mutates the on-disk superblock (free_blocks,
+ * free_inodes, RS journal, ...) must call this helper instead of
+ * mark_buffer_dirty(sbi->s_sbh) directly. Without the CRC refresh,
+ * the on-disk superblock keeps a stale checksum that fails verification
+ * at the next mount.
+ *
+ * Caller MUST hold sbi->s_lock so that the snapshot copied to the
+ * buffer head is taken atomically with respect to other writers.
+ */
+void ftrfs_dirty_super(struct ftrfs_sb_info *sbi)
+{
+	struct ftrfs_super_block *fsb;
+	u32 crc;
+
+	if (!sbi || !sbi->s_sbh || !sbi->s_ftrfs_sb)
+		return;
+
+	fsb = (struct ftrfs_super_block *)sbi->s_sbh->b_data;
+
+	/*
+	 * Copy the authoritative in-memory image onto the buffer head.
+	 * Several callers update sbi->s_ftrfs_sb in place without touching
+	 * fsb; this memcpy serializes them onto disk.
+	 */
+	memcpy(fsb, sbi->s_ftrfs_sb, sizeof(*fsb));
+
+	crc = ftrfs_crc32_sb(fsb);
+	fsb->s_crc32 = cpu_to_le32(crc);
+	sbi->s_ftrfs_sb->s_crc32 = fsb->s_crc32;
+
+	mark_buffer_dirty(sbi->s_sbh);
+}
+
+/*
  * ftrfs_log_rs_event - record a Reed-Solomon correction in the superblock
  * @sb:        mounted superblock
  * @block_no:  block number where correction occurred
@@ -168,9 +206,8 @@ static const struct super_operations ftrfs_super_ops = {
  */
 void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 {
-	struct ftrfs_sb_info     *sbi = FTRFS_SB(sb);
-	struct ftrfs_super_block *fsb;
-	struct ftrfs_rs_event    *ev;
+	struct ftrfs_sb_info  *sbi = FTRFS_SB(sb);
+	struct ftrfs_rs_event *ev;
 	u8 head;
 
 	if (!sbi || !sbi->s_sbh)
@@ -179,13 +216,11 @@ void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 	spin_lock(&sbi->s_lock);
 
 	/*
-	 * Write directly to the buffer_head backing the on-disk superblock.
-	 * Also update the in-memory copy (sbi->s_ftrfs_sb) to keep them
-	 * consistent, since other paths read from sbi->s_ftrfs_sb.
+	 * Update the in-memory authoritative copy first; ftrfs_dirty_super
+	 * then propagates it to the buffer head with a refreshed s_crc32.
 	 */
-	fsb  = (struct ftrfs_super_block *)sbi->s_sbh->b_data;
-	head = fsb->s_rs_journal_head % FTRFS_RS_JOURNAL_SIZE;
-	ev   = &fsb->s_rs_journal[head];
+	head = sbi->s_ftrfs_sb->s_rs_journal_head % FTRFS_RS_JOURNAL_SIZE;
+	ev   = &sbi->s_ftrfs_sb->s_rs_journal[head];
 
 	ev->re_block_no   = cpu_to_le64(block_no);
 	ev->re_timestamp  = cpu_to_le64(ktime_get_ns());
@@ -197,13 +232,9 @@ void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits)
 		ev->re_crc32 = cpu_to_le32(ev_crc);
 	}
 
-	fsb->s_rs_journal_head = (head + 1) % FTRFS_RS_JOURNAL_SIZE;
+	sbi->s_ftrfs_sb->s_rs_journal_head = (head + 1) % FTRFS_RS_JOURNAL_SIZE;
 
-	/* Sync to in-memory copy */
-	sbi->s_ftrfs_sb->s_rs_journal[head] = *ev;
-	sbi->s_ftrfs_sb->s_rs_journal_head  = fsb->s_rs_journal_head;
-
-	mark_buffer_dirty(sbi->s_sbh);
+	ftrfs_dirty_super(sbi);
 
 	spin_unlock(&sbi->s_lock);
 

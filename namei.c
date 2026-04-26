@@ -58,6 +58,22 @@ int ftrfs_write_inode_raw(struct inode *inode)
 	raw->i_crc32 = ftrfs_crc32(raw,
 				    offsetof(struct ftrfs_inode, i_crc32));
 
+	/*
+	 * Compute RS parity over the first FTRFS_INODE_RS_DATA bytes
+	 * (everything up to i_reserved, including i_crc32). Parity goes
+	 * into i_reserved[0..15]; i_reserved[16..83] is forced to zero so
+	 * the layout is deterministic and any non-zero byte there at read
+	 * time signals a tampered inode.
+	 *
+	 * Under FTRFS_DATA_PROTECTION_INODE_UNIVERSAL this parity is the
+	 * authoritative correction record for the inode. mkfs.ftrfs writes
+	 * the equivalent parity on the root inode at format time; the
+	 * kernel maintains it on every subsequent inode write.
+	 */
+	memset(&raw->i_reserved[FTRFS_RS_PARITY], 0,
+	       sizeof(raw->i_reserved) - FTRFS_RS_PARITY);
+	ftrfs_rs_encode((u8 *)raw, FTRFS_INODE_RS_DATA, raw->i_reserved);
+
 	mark_buffer_dirty(bh);
 	brelse(bh);
 

@@ -50,13 +50,63 @@ struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino)
 	}
 
 	raw = (struct ftrfs_inode *)bh->b_data + offset;
-	/* Verify inode CRC32 */
+
+	/*
+	 * Integrity check, two stages.
+	 *
+	 * Stage A: CRC32. The nominal path. >99% of inode reads are
+	 * expected to match here at low cost; CRC32 is hardware-accelerated
+	 * by crc32_le on architectures that support it.
+	 *
+	 * Stage B: RS FEC, only invoked if CRC32 fails AND the format
+	 * declares RS protection on inodes (s_data_protection_scheme ==
+	 * INODE_UNIVERSAL). For images formatted under the legacy
+	 * INODE_OPT_IN scheme (v0.1.0 / v0.2.0 baseline), no per-inode
+	 * parity was ever written by mkfs, so attempting RS would be
+	 * useless or actively harmful (random bytes interpreted as parity
+	 * could push the decoder into a false correction).
+	 *
+	 * After a successful RS correction we re-verify CRC32 on the
+	 * corrected buffer before accepting the inode. This guards
+	 * against the rare case where an SEU on the parity field itself
+	 * makes decode_rs8 return success while the data has actually
+	 * been altered toward a wrong codeword.
+	 */
 	crc = ftrfs_crc32(raw, offsetof(struct ftrfs_inode, i_crc32));
 	if (crc != le32_to_cpu(raw->i_crc32)) {
-		pr_err("ftrfs: inode %lu CRC32 mismatch\n", ino);
-		brelse(bh);
-		iget_failed(inode);
-		return ERR_PTR(-EIO);
+		u32 scheme = le32_to_cpu(
+			FTRFS_SB(sb)->s_ftrfs_sb->s_data_protection_scheme);
+		int nerr;
+
+		if (scheme != FTRFS_DATA_PROTECTION_INODE_UNIVERSAL) {
+			pr_err("ftrfs: inode %lu CRC32 mismatch (no RS available, scheme=%u)\n",
+			       ino, scheme);
+			brelse(bh);
+			iget_failed(inode);
+			return ERR_PTR(-EIO);
+		}
+
+		nerr = ftrfs_rs_decode((u8 *)raw, FTRFS_INODE_RS_DATA,
+				       raw->i_reserved);
+		if (nerr < 0) {
+			pr_err("ftrfs: inode %lu uncorrectable\n", ino);
+			brelse(bh);
+			iget_failed(inode);
+			return ERR_PTR(-EIO);
+		}
+
+		crc = ftrfs_crc32(raw, offsetof(struct ftrfs_inode, i_crc32));
+		if (crc != le32_to_cpu(raw->i_crc32)) {
+			pr_err("ftrfs: inode %lu CRC32 mismatch after RS correction\n",
+			       ino);
+			brelse(bh);
+			iget_failed(inode);
+			return ERR_PTR(-EIO);
+		}
+
+		ftrfs_log_rs_event(sb, (u64)ino, 0);
+		mark_buffer_dirty(bh);
+		pr_warn("ftrfs: inode %lu corrected by RS FEC\n", ino);
 	}
 
 	fi = FTRFS_I(inode);

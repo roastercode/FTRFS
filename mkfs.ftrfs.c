@@ -41,7 +41,11 @@
 
 /* Data protection scheme values (must match kernel ftrfs.h) */
 #define FTRFS_DATA_PROTECTION_NONE              0
-#define FTRFS_DATA_PROTECTION_INODE_OPT_IN      1
+#define FTRFS_DATA_PROTECTION_INODE_OPT_IN      1  /* deprecated, v0.1.0/v0.2.0 only */
+#define FTRFS_DATA_PROTECTION_INODE_UNIVERSAL   5  /* stage 3 onward */
+
+/* RS coverage on the inode: bytes [0, offsetof(i_reserved)) = 172 */
+#define FTRFS_INODE_RS_DATA  172
 
 /* Minimal CRC32 for userspace mkfs */
 static uint32_t crc32_table[256];
@@ -210,6 +214,78 @@ static void rs_encode_bitmap(uint8_t *block)
 	}
 }
 
+/*
+ * rs_encode_inode -- compute 16 bytes of RS parity over the first
+ * FTRFS_INODE_RS_DATA bytes of an inode buffer, write the parity into
+ * the next 16 bytes (which are i_reserved[0..15] of the inode).
+ *
+ * Uses the same shortened-code convention as lib/reed_solomon: a
+ * codeword shorter than 239 is mathematically equivalent to the full
+ * codeword padded with zeros at the front. The LFSR loop is identical
+ * to encode_rs.c; only the iteration count changes.
+ *
+ * inode_buf must be at least FTRFS_INODE_RS_DATA + 16 bytes wide.
+ */
+static void rs_encode_inode(uint8_t *inode_buf)
+{
+	static const int nn = 255;
+	uint16_t alpha_to[256], index_of[256];
+	uint16_t genpoly[17];
+	uint16_t gp[17];
+	uint16_t par[16];
+	int sr, i, j, root;
+
+	/* GF(2^8) tables (same as rs_encode_bitmap) */
+	sr = 1;
+	for (i = 0; i < nn; i++) {
+		index_of[sr] = i;
+		alpha_to[i]  = sr;
+		sr <<= 1;
+		if (sr & 256)
+			sr ^= 0x187;
+		sr &= nn;
+	}
+	alpha_to[nn] = 0;
+	index_of[0]  = nn;
+
+	memset(gp, 0, sizeof(gp));
+	gp[0] = 1;
+	root = 0;
+	for (i = 0; i < 16; i++) {
+		gp[i + 1] = 1;
+		for (j = i; j > 0; j--) {
+			if (gp[j] != 0) {
+				int idx = (index_of[gp[j]] + root) % nn;
+				gp[j] = gp[j - 1] ^ alpha_to[idx];
+			} else {
+				gp[j] = gp[j - 1];
+			}
+		}
+		gp[0] = alpha_to[(index_of[gp[0]] + root) % nn];
+		root += 1;
+	}
+	for (i = 0; i <= 16; i++)
+		genpoly[i] = index_of[gp[i]];
+
+	/* LFSR encode over FTRFS_INODE_RS_DATA bytes */
+	memset(par, 0, sizeof(par));
+	for (i = 0; i < FTRFS_INODE_RS_DATA; i++) {
+		uint16_t fb = index_of[(inode_buf[i] ^ (uint8_t)par[0]) & nn];
+		if (fb != (uint16_t)nn) {
+			for (j = 1; j < 16; j++)
+				par[j] ^= alpha_to[(fb + genpoly[16 - j]) % nn];
+		}
+		memmove(&par[0], &par[1], sizeof(uint16_t) * 15);
+		par[15] = (fb != (uint16_t)nn)
+			? alpha_to[(fb + genpoly[0]) % nn]
+			: 0;
+	}
+
+	/* Write parity to bytes [FTRFS_INODE_RS_DATA .. +16) */
+	for (j = 0; j < 16; j++)
+		inode_buf[FTRFS_INODE_RS_DATA + j] = (uint8_t)par[j];
+}
+
 struct ftrfs_inode {
 	uint16_t i_mode;
 	uint16_t i_nlink;
@@ -374,6 +450,13 @@ int main(int argc, char *argv[])
 	ri->i_direct[0] = root_dir_blk;
 	ri->i_crc32  = crc32(ri, offsetof(struct ftrfs_inode, i_crc32));
 
+	/*
+	 * Compute RS parity over the first FTRFS_INODE_RS_DATA bytes of
+	 * the root inode. The parity lands in i_reserved[0..15]. The rest
+	 * of i_reserved[16..83] is already zero from the memset above.
+	 */
+	rs_encode_inode((uint8_t *)ri);
+
 	write_block(fd, inode_table_blk, inode_block);
 
 	/* Write superblock */
@@ -392,14 +475,14 @@ int main(int argc, char *argv[])
 	sb.s_feat_compat    = 0;
 	sb.s_feat_incompat  = 0;
 	sb.s_feat_ro_compat = 0;
-	sb.s_data_protection_scheme = FTRFS_DATA_PROTECTION_INODE_OPT_IN;
+	sb.s_data_protection_scheme = FTRFS_DATA_PROTECTION_INODE_UNIVERSAL;
 	sb.s_crc32          = crc32_sb(&sb);
 
 	write_block(fd, 0, &sb);
 	close(fd);
 
 	printf("mkfs.ftrfs: formatted %s\n", argv[optind]);
-	printf("  format:  v%u (scheme=%u INODE_OPT_IN, no incompat features)\n",
+	printf("  format:  v%u (scheme=%u INODE_UNIVERSAL, no incompat features)\n",
 	       (unsigned)sb.s_version,
 	       (unsigned)sb.s_data_protection_scheme);
 	printf("  blocks:  %lu (free: %lu)\n",

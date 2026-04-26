@@ -90,7 +90,8 @@ struct ftrfs_rs_event {
 #define FTRFS_DATA_PROTECTION_UNIVERSAL_INLINE  2
 #define FTRFS_DATA_PROTECTION_UNIVERSAL_SHADOW  3
 #define FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT  4
-#define FTRFS_DATA_PROTECTION_MAX               FTRFS_DATA_PROTECTION_UNIVERSAL_EXTENT
+#define FTRFS_DATA_PROTECTION_INODE_UNIVERSAL   5
+#define FTRFS_DATA_PROTECTION_MAX               FTRFS_DATA_PROTECTION_INODE_UNIVERSAL
 
 /*
  * Feature flag masks.
@@ -169,8 +170,19 @@ struct ftrfs_inode {
 	__u8    i_reserved[84];     /* Padding to 256 bytes */
 } __packed;
 
-/* Inode flags */
-#define FTRFS_INODE_FL_RS_ENABLED   0x0001  /* RS FEC enabled */
+/*
+ * Inode flags.
+ *
+ * FTRFS_INODE_FL_RS_ENABLED: deprecated as of stage 3 (v0.3.0+).
+ *   Was the per-inode opt-in for RS FEC under the
+ *   FTRFS_DATA_PROTECTION_INODE_OPT_IN scheme. Stage 3 replaces
+ *   that scheme with FTRFS_DATA_PROTECTION_INODE_UNIVERSAL, where
+ *   all inodes are RS-protected unconditionally. The flag is
+ *   preserved in the bit definition so v0.1.0/v0.2.0 images that
+ *   set it remain mountable; new images do not set it.
+ *   See Documentation/threat-model.md section 6.1 and 6.3.
+ */
+#define FTRFS_INODE_FL_RS_ENABLED   0x0001  /* deprecated, see comment */
 #define FTRFS_INODE_FL_VERIFIED     0x0002  /* Integrity verified */
 
 /*
@@ -230,6 +242,7 @@ static inline struct ftrfs_sb_info *FTRFS_SB(struct super_block *sb)
 /* super.c */
 int ftrfs_fill_super(struct super_block *sb, struct fs_context *fc);
 void ftrfs_log_rs_event(struct super_block *sb, u64 block_no, u32 err_bits);
+void ftrfs_dirty_super(struct ftrfs_sb_info *sbi);
 
 /* inode.c */
 struct inode *ftrfs_iget(struct super_block *sb, unsigned long ino);
@@ -249,8 +262,8 @@ void ftrfs_rs_init_tables(void);
 void ftrfs_rs_exit_tables(void);
 __u32 ftrfs_crc32(const void *buf, size_t len);
 __u32 ftrfs_crc32_sb(const struct ftrfs_super_block *fsb);
-int ftrfs_rs_encode(u8 *data, u8 *parity);
-int ftrfs_rs_decode(u8 *data, u8 *parity);
+int ftrfs_rs_encode(u8 *data, size_t len, u8 *parity);
+int ftrfs_rs_decode(u8 *data, size_t len, u8 *parity);
 
 /* alloc.c */
 int  ftrfs_setup_bitmap(struct super_block *sb);

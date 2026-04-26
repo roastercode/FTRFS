@@ -102,7 +102,7 @@ int ftrfs_setup_bitmap(struct super_block *sb)
 		u8 *subparity = subdata + FTRFS_SUBBLOCK_DATA;
 		int rc;
 
-		rc = ftrfs_rs_decode(subdata, subparity);
+		rc = ftrfs_rs_decode(subdata, FTRFS_SUBBLOCK_DATA, subparity);
 		if (rc < 0) {
 			pr_err("ftrfs: bitmap subblock %lu uncorrectable\n", i);
 		} else if (rc > 0) {
@@ -226,7 +226,7 @@ int ftrfs_write_bitmap(struct super_block *sb)
 		u8 *subdata   = bdata + i * FTRFS_SUBBLOCK_TOTAL;
 		u8 *subparity = subdata + FTRFS_SUBBLOCK_DATA;
 
-		ftrfs_rs_encode(subdata, subparity);
+		ftrfs_rs_encode(subdata, FTRFS_SUBBLOCK_DATA, subparity);
 	}
 
 	mark_buffer_dirty(sbi->s_bitmap_blkh);
@@ -293,7 +293,7 @@ u64 ftrfs_alloc_block(struct super_block *sb)
 	clear_bit(bit, sbi->s_block_bitmap);
 	sbi->s_free_blocks--;
 	sbi->s_ftrfs_sb->s_free_blocks = cpu_to_le64(sbi->s_free_blocks);
-	mark_buffer_dirty(sbi->s_sbh);
+	ftrfs_dirty_super(sbi);
 	ftrfs_write_bitmap(sb);
 
 	spin_unlock(&sbi->s_lock);
@@ -331,7 +331,7 @@ void ftrfs_free_block(struct super_block *sb, u64 block)
 	set_bit(bit, sbi->s_block_bitmap);
 	sbi->s_free_blocks++;
 	sbi->s_ftrfs_sb->s_free_blocks = cpu_to_le64(sbi->s_free_blocks);
-	mark_buffer_dirty(sbi->s_sbh);
+	ftrfs_dirty_super(sbi);
 	ftrfs_write_bitmap(sb);
 
 	spin_unlock(&sbi->s_lock);
@@ -382,7 +382,7 @@ u64 ftrfs_alloc_inode_num(struct super_block *sb)
 	clear_bit(bit, sbi->s_inode_bitmap);
 	sbi->s_free_inodes--;
 	sbi->s_ftrfs_sb->s_free_inodes = cpu_to_le64(sbi->s_free_inodes);
-	mark_buffer_dirty(sbi->s_sbh);
+	ftrfs_dirty_super(sbi);
 
 	spin_unlock(&sbi->s_lock);
 
@@ -414,7 +414,7 @@ void ftrfs_free_inode_num(struct super_block *sb, u64 ino)
 	set_bit((unsigned long)ino, sbi->s_inode_bitmap);
 	sbi->s_free_inodes++;
 	sbi->s_ftrfs_sb->s_free_inodes = cpu_to_le64(sbi->s_free_inodes);
-	mark_buffer_dirty(sbi->s_sbh);
+	ftrfs_dirty_super(sbi);
 
 	spin_unlock(&sbi->s_lock);
 }
