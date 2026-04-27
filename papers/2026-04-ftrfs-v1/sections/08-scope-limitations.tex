@@ -1,0 +1,59 @@
+\section{Scope and Limitations}\label{sec:limits}
+
+This section is treated as a structural component of the report,
+not as a concession. It records, in plain language, what the
+present version covers and what it does not, so that subsequent
+versions can extend the scope without ambiguity.
+
+\paragraph{V1 covers.}
+Stage~3 partial closure: items 1, 2, 3, 4a and 4b-dirent are
+\textsc{closed} in the source tree and pushed to the public
+repository (\cref{sec:implementation}). The on-disk format
+v3 is stable. The universal protection scheme
+\texttt{INODE\_UNIVERSAL} is the active scheme. Static and
+functional verification (checkpatch, four xfstests, dmesg sweep,
+module hash uniformity) are reported in \cref{sec:evaluation}.
+The I/O baseline of \cref{tab:iobench} is the reference
+against which v2 will measure regression after the format~v4
+transition.
+
+\paragraph{V1 does not cover.}
+\begin{itemize}
+\item Item~4 (Shannon entropy field, \texttt{struct ftrfs\_rs\_event}
+  growth from 24 to 40 bytes, superblock layout migration to 13~RS
+  subblocks). The design is frozen in
+  \texttt{Documentation/roadmap.md} but no kernel or user-space
+  code has been written. v2 will report it.
+\item User-space CVE remediation. The hardened build reports
+  239~unpatched CVEs distributed across user-space packages
+  (\texttt{openssl}, \texttt{glibc}, \texttt{libxml2},
+  \texttt{libpam}, \texttt{python3}, etc.). No backport patches
+  or version upgrades have been applied; this is the scope of
+  the v0.4 milestone.
+\item Stage~4 (universal data-block protection). The three
+  reserved scheme values \texttt{UNIVERSAL\_INLINE},
+  \texttt{UNIVERSAL\_SHADOW} and \texttt{UNIVERSAL\_EXTENT} are
+  defined in the header but no implementation backs any of them.
+\item Stage~5 (offensive security review). No syzkaller campaign,
+  KASAN-instrumented stress run, or formal adversarial review has
+  been conducted.
+\item Hardware-on-physical-platform measurement. The bench cluster
+  is QEMU/TCG arm64; no measurements on physical embedded hardware
+  are reported.
+\item Comparative benchmarking against
+  \texttt{ext4 + dm-integrity + dm-verity} on equivalent hardware.
+\end{itemize}
+
+\paragraph{Methodological limits.}
+The author is the sole contributor; no peer review beyond the
+public mailing-list interactions on linux-fsdevel has shaped this
+text. The bench harness has known limitations: \texttt{dd}-based
+timing at millisecond resolution produces quantization artifacts
+(\cref{sec:evaluation}); host load isolation is not enforced
+during measurement. These limitations are documented but not
+remediated in v1.
+
+The acknowledgement of these gaps is itself an application of
+axis~3.2 (MIL-STD-882E hazard tracking practice): rather than
+present the project as more complete than it is, we record the
+state, the gap, and the resolution path.

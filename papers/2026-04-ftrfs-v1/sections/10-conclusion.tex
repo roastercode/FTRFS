@@ -1,0 +1,16 @@
+\section{Conclusion}\label{sec:conclusion}
+
+This Technical Report v1 documents an implementation of FTRFS for
+contemporary Linux that combines universal Reed--Solomon FEC on
+metadata, persistent on-disk radiation event journaling, and
+strict fail-closed mount semantics --- a combination not present,
+to our knowledge, in any other Linux filesystem
+(\cref{tab:fs-comparison}). The design is anchored in
+MIL-STD-882E hazard tracking practice and the four operational
+axes of \cref{tab:axes}; its v1 implementation status
+(stage~3 partial closure, format v3 stable, hardened arm64 build
+with zero unpatched kernel CVE) is captured in
+\cref{tab:items-status} and validated in
+\cref{sec:evaluation}. The format v4 transition (Shannon
+entropy, struct growth, superblock layout migration) is designed
+and frozen, scheduled for v2 of this report.

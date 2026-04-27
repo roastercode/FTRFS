@@ -1,0 +1,100 @@
+\section{Background and Related Work}\label{sec:related}
+
+\subsection{The Fuchs et al. 2015 concept}
+
+Fuchs, Langer and Trinitis~\cite{fuchs2015ftrfs} proposed the
+original FTRFS concept at ARCS~2015 as a research contribution
+exploring fault-tolerance for filesystems exposed to radiation
+environments. The 2015 work established the principle of integrating
+forward error correction at the filesystem layer rather than
+delegating it to lower storage tiers. It did not target the Linux
+mainline kernel as we know it today: the kernel infrastructure
+available in 2015 (\texttt{lib/reed\_solomon} primarily used by
+MTD/NAND), the validation tooling (xfstests scope, syzkaller maturity,
+KASAN), and the surrounding standards (MIL-STD-882E adoption for
+software, NIST SP~800-193~\cite{nistsp800193}, NIS2 EU directive,
+French OIV regulation) have all evolved substantially. The present
+work is a 2026 implementation responding to the 2015 problem
+statement under contemporary constraints.
+
+\subsection{Linux/BSD filesystem landscape (2026)}
+
+\Cref{tab:fs-comparison} summarizes how FTRFS positions against
+the production filesystems available to a Linux deployment as of
+April~2026. The comparison restricts itself to verifiable facts
+from each project's documentation and source tree; it does not
+attempt to rank filesystems by overall merit or suitability for
+non-radiation workloads.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Filesystem metadata protection landscape (April 2026).}
+\label{tab:fs-comparison}
+\begin{tabularx}{\textwidth}{lXXXXl}
+\toprule
+\textbf{FS} &
+\textbf{Metadata checksum} &
+\textbf{Metadata FEC} &
+\textbf{On-disk event journal} &
+\textbf{Fail-closed} &
+\textbf{Tree} \\
+\midrule
+ext4
+  & CRC32C (optional)
+  & none
+  & none
+  & best-effort
+  & mainline \\
+btrfs
+  & CRC32C / xxhash / sha256
+  & none
+  & \texttt{dev\_stats} (counters)
+  & best-effort
+  & mainline \\
+bcachefs
+  & CRC32C / xxhash (optional)
+  & none
+  & none
+  & best-effort
+  & mainline \\
+ZFS (OpenZFS)
+  & fletcher4 / sha256
+  & RAID-Z (data only)
+  & in-memory pool log
+  & partial
+  & out-of-tree \\
+\textbf{FTRFS}
+  & \textbf{CRC32 + RS FEC layered}
+  & \textbf{RS(255,239) on inode, bitmap, superblock}
+  & \textbf{64-entry ring buffer in SB, CRC-protected}
+  & \textbf{strict (version, scheme, features)}
+  & out-of-tree (RFC v3) \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+To our knowledge, no other Linux filesystem combines (i) universal
+Reed--Solomon FEC on metadata structures, (ii) a persistent on-disk
+journal of correctable events suitable for forensic post-mortem,
+and (iii) strict fail-closed semantics on multiple structural axes
+simultaneously. Individual properties exist in isolation: ZFS has
+RAID-Z FEC on data blocks; ext4 has metadata CRC; btrfs records
+device-level error counters. Their conjunction in a single
+metadata trust chain is, as far as we have surveyed, specific to
+FTRFS.
+
+\subsection{Community engagement on linux-fsdevel}
+
+The project has been submitted to the linux-fsdevel mailing list
+in three RFC iterations (v1, v2, v3) between January and April
+2026. The threads are publicly archived on
+\url{lore.kernel.org} and have engaged senior reviewers active in
+filesystem maintenance. The engagement has produced substantial
+design feedback that has shaped the architecture documented here ---
+notably the layered CRC32+RS defense, the universal protection
+scheme replacing the original per-inode opt-in, and the strict
+fail-closed posture on version mismatches. We treat the present
+report as a structured complement to those mailing-list threads,
+not a replacement.
+

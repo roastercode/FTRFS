@@ -1,0 +1,114 @@
+\section{Evaluation}\label{sec:evaluation}
+
+\subsection{Test environment}
+
+The evaluation runs on a four-node libvirt cluster of arm64
+virtual machines (one master, three compute nodes), each booted
+from a Yocto Scarthgap-built squashfs read-only root filesystem.
+Each compute VM mounts a real \texttt{/dev/vdb} partition formatted
+as FTRFS via virtio block. The host is a workstation running
+Gentoo Linux with QEMU/TCG arm64 emulation (no hardware
+passthrough): 20 host threads available, 31~GiB RAM, single SSD
+backing all VM images. The VMs run linux-mainline 7.0.1 with the
+hardening configuration documented in
+\cref{sec:repro}; the ftrfs.ko module is identical
+across all four nodes, verified by md5sum.
+
+\subsection{Build hardening and CVE posture}
+
+The build uses linux-mainline 7.0.1 (kernel.org stable point
+release, SRCREV
+\texttt{3cb1fb7a56d2fd8011f5282bc170c0d23dc1f4b5}) within Yocto
+Scarthgap LTS. The \texttt{cve\_check} task reports zero
+unpatched kernel CVEs and 12{,}562 patched after applying an
+explicit exclusion file marking 88 pre-v7.0 NVD entries as
+\texttt{fixed-version}; the exclusion file is committed at
+\texttt{recipes-kernel/linux/cve-exclusions-kernel.inc} (commit
+\texttt{9a5593b} of the
+\texttt{yocto-hardened} layer~\cite{yocto-hardened-repo}). The
+full image manifest reports 16{,}974 patched, 239 unpatched
+(entirely user-space, scope of v0.4 per \cref{sec:future})
+and 56 ignored, totalling 17{,}269 issues processed.
+
+\subsection{Static and functional verification}
+
+\begin{itemize}
+\item \texttt{checkpatch.pl} with the kernel-tree configuration:
+  zero errors and zero warnings on all modified filesystem source
+  files at HEAD \texttt{9a63468}.
+\item Compile-time sentinels (\texttt{BUILD\_BUG\_ON} in the
+  kernel module, \texttt{static\_assert} in \texttt{mkfs.ftrfs})
+  enforce on-disk struct sizes (24 bytes for
+  \texttt{ftrfs\_rs\_event} in v3, 4096 bytes for
+  \texttt{ftrfs\_super\_block}).
+\item \texttt{generic/002}, \texttt{generic/010},
+  \texttt{generic/098}, \texttt{generic/257} of the
+  \texttt{xfstests} suite pass under manual invocation (4 of 5
+  attempted; \texttt{generic/001} requires more than 2~GiB
+  scratch, deferred).
+\item Runtime \texttt{dmesg} sweep across all four nodes after a
+  full bench pass: zero
+  \texttt{BUG}/\texttt{WARN}/\texttt{Oops}/uncorrectable events.
+\end{itemize}
+
+\subsection{I/O baseline}
+
+\Cref{tab:iobench} summarizes the I/O baseline measured on
+2026-04-27 against the hardened build (squashfs MD5
+\texttt{c56c203feb524f556329746fd693e805}). Each metric is sampled
+30~times (3 compute nodes $\times$ 10~runs).
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{FTRFS I/O baseline. 30 samples per metric. M1, M2 in
+MB/s; M4 in seconds; M5 in ms/file. Bench JSON committed at
+\texttt{papers/2026-04-ftrfs-v1/data/}.}
+\label{tab:iobench}
+\begin{tabular}{l l r r r r}
+\toprule
+\textbf{ID} & \textbf{Metric} &
+\textbf{Min} & \textbf{Median} & \textbf{Max} & \textbf{Stddev} \\
+\midrule
+M1 & Write seq + fsync (4~MB)             & 2.128  & 5.000  & 5.556  & 0.584  \\
+M2 & Read seq cold (4~MB)                 & 12.500 & 20.000 & 25.000 & 2.458  \\
+M4 & Stat bulk (100 files)                & 0.140  & 0.150  & 0.160  & 0.006  \\
+M5 & Small write + fsync (10$\times$64~B) & 21.000 & 23.000 & 30.000 & 2.331  \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The metric distributions are concentrated, reflecting the
+deterministic behaviour of the metadata paths under the load
+profile (per axis~3.4). The discrete clustering of M1 and M2
+values is a measurement artifact of \texttt{dd}'s temporal
+resolution at the millisecond granularity. The single M1 outlier
+at 2.128~MB/s corresponds to a host load spike during run capture
+(load average 1.99/2.45/3.44), included in the data without
+correction in the interest of full disclosure. A bench harness
+with sub-millisecond timing is on the roadmap for v2.
+
+Throughput is not the design objective: a fair comparison against
+\texttt{ext4 + dm-integrity + dm-verity} on the same platform is
+reserved for v3, when stage~4 enables feature parity.
+
+Slurm cluster scheduling latencies, captured in the same session,
+are reported in \cref{tab:slurm}; they document the
+deployment context end-to-end.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Slurm scheduler latency on the FTRFS-backed cluster.}
+\label{tab:slurm}
+\begin{tabular}{l l r}
+\toprule
+\textbf{ID} & \textbf{Phase} & \textbf{Latency (s)} \\
+\midrule
+S1 & Job submit latency (1 node)        & 0.300 \\
+S2 & Parallel job (3 nodes)             & 0.370 \\
+S3 & Throughput (9 jobs)                & 5.020 \\
+S4 & FTRFS write from Slurm job         & PASS \\
+\bottomrule
+\end{tabular}
+\end{table}

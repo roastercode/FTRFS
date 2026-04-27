@@ -343,6 +343,28 @@ Commit attribution: `Assisted-by: Claude:claude-sonnet-4-6`
 
 ---
 
+## Publications
+
+### Technical Report v1 (April 2026)
+
+- **HAL**: [hal-05603801v1](https://hal.science/hal-05603801) — *FTRFS: Bringing Radiation-Robust Filesystem Principles to Contemporary Linux. A Reed--Solomon, MIL-STD-882E-Aligned Implementation (Technical Report -- Version 1)*
+- **License**: CC-BY 4.0
+- **Source**: [`papers/2026-04-ftrfs-v1/`](./papers/2026-04-ftrfs-v1/) (LaTeX source, bibliography, dataset, build instructions)
+- **Anchor commit**: `9a63468`
+
+This report is part of a versioned publication roadmap aligned with
+the project's engineering milestones. Subsequent versions (v2, v3, v4)
+will follow the tags `v0.3.0-metadata-hardening`,
+`v0.4.0-universal-protection`, and `v0.5.0-security-reviewed`
+respectively. Each new version is deposited under the same HAL
+`idHAL` (`aurelien-desbrieres`), preserving cumulative anteriority
+through HAL's native versioning. Each version will additionally be
+mirrored to Zenodo via a GitHub release tag, yielding a perennial
+DOI independent of the HAL platform.
+
+See `Documentation/roadmap.md` (section "Publication roadmap") for
+the engineering-publication alignment table.
+
 ## Press & community coverage
 
 - Phoronix — *FTRFS: New Fault-Tolerant File-System Proposed For Linux* (2026-04-13):

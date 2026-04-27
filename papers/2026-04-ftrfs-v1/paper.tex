@@ -1,0 +1,117 @@
+% FTRFS Technical Report v1 -- 2026-04-27
+% Author: Aurelien DESBRIERES
+% License: CC-BY-4.0
+% Build: latexmk -lualatex paper.tex
+% Template: IEEEtran.cls (conference mode, 2-column 10pt -- arXiv cs.CR style)
+
+\documentclass[10pt,conference,a4paper]{IEEEtran}
+
+% --- LuaLaTeX font stack ---
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Latin Modern Mono}
+\setmathfont{Latin Modern Math}
+
+% --- IEEE conference style requires Times-like math; we use Latin Modern Math which works ---
+
+% --- Math/symbols ---
+\usepackage{amsmath}
+\usepackage{amssymb}        % FIX: \checkmark needs this in IEEEtran (no auto-load)
+\usepackage{mathtools}
+
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+
+% --- TikZ for SB layout figure ---
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes,arrows.meta,calc,patterns,decorations.pathreplacing}
+
+% --- Code listings ---
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  showstringspaces=false,
+  commentstyle=\itshape\color{gray!70!black},
+  keywordstyle=\bfseries,
+}
+
+% --- URLs (2-col friendly, breaks long URLs in narrow columns) ---
+\usepackage{xurl}
+
+% --- Bibliography (biber + biblatex, IEEE numeric style) ---
+\usepackage[backend=biber,style=ieee,sorting=none,maxbibnames=5]{biblatex}
+\addbibresource{refs.bib}
+
+% --- Cross-references ---
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black,
+  pdftitle={FTRFS: Bringing Radiation-Robust Filesystem Principles to Contemporary Linux},
+  pdfauthor={Aurelien DESBRIERES},
+  pdfsubject={Filesystem; Reed-Solomon FEC; MIL-STD-882E; Radiation Robustness; Linux Kernel},
+  pdfkeywords={FTRFS, Reed-Solomon, filesystem, radiation, MIL-STD-882E, Linux, embedded},
+}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+% --- Microtype for finer typography ---
+\usepackage{microtype}
+\usepackage{xspace}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=1.5em}
+
+% ====================================================================
+% TITLE BLOCK -- IEEEtran syntax
+% ====================================================================
+
+\title{\large\bfseries FTRFS: Bringing Radiation-Robust Filesystem Principles to Contemporary Linux\\
+       \normalsize\mdseries A Reed--Solomon, MIL-STD-882E-Aligned Implementation\\
+       \small\itshape Technical Report -- Version 1}
+
+\author{%
+  \IEEEauthorblockN{Aur\'elien Desbri\`eres \textemdash{} Independent researcher}
+  \IEEEauthorblockA{\href{https://orcid.org/0009-0002-0912-9487}{ORCID:~0009-0002-0912-9487} \quad
+    \texttt{aurelien.desbrieres@gmail.com}}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{IEEEkeywords}
+Filesystem, Reed--Solomon FEC, Radiation robustness,
+MIL-STD-882E, Linux kernel, Embedded systems, Yocto Project
+\end{IEEEkeywords}
+
+\begin{abstract}
+\input{sections/00-abstract}
+\end{abstract}
+
+\input{sections/01-introduction}
+\input{sections/02-related-work}
+\input{sections/03-design-principles}
+\input{sections/04-threat-model}
+\input{sections/05-architecture}
+\input{sections/06-implementation}
+\input{sections/07-evaluation}
+\input{sections/08-scope-limitations}
+\input{sections/09-future-work}
+\input{sections/10-conclusion}
+
+% Switch to single column for Reproducibility + References
+% (annex-style: long URLs and citations need full-width small typography)
+\onecolumn
+\small
+
+\input{sections/11-reproducibility}
+
+\printbibliography
+
+\end{document}

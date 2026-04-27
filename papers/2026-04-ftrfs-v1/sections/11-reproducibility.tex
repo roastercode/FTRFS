@@ -1,0 +1,70 @@
+\section{Reproducibility}\label{sec:repro}
+
+\paragraph{Source repository.}
+\url{https://github.com/roastercode/FTRFS}, branch \texttt{main},
+HEAD \texttt{9a63468} at the time of this report.
+
+\paragraph{Yocto layer.}
+\url{https://github.com/roastercode/yocto-hardened}, branch
+\texttt{arm64-ftrfs}, HEAD \texttt{9a5593b}.
+
+\paragraph{Hardened build identifiers.}
+\begin{itemize}
+\item Yocto release: Scarthgap (LTS, supported until April 2028).
+\item Kernel: linux-mainline 7.0.1, SRCREV
+  \texttt{3cb1fb7a56d2fd8011f5282bc170c0d23dc1f4b5},
+  branch \texttt{linux-7.0.y} of the
+  \texttt{kernel.org/pub/scm/linux/kernel/git/stable/linux.git}
+  tree.
+\item Recipe: \texttt{recipes-kernel/linux/linux-mainline\_7.0.1.bb}.
+\item CVE exclusion file: \texttt{recipes-kernel/linux/cve-exclusions-kernel.inc}
+  (88 pre-v7.0 NVD entries marked \texttt{fixed-version}).
+\item Image: \texttt{hpc-arm64-research-qemuarm64-20260427094749.squashfs}.
+\item Image MD5: \texttt{c56c203feb524f556329746fd693e805}.
+\item CVE manifest totals: 16{,}974 patched, 239 unpatched
+  (user-space, scope of v0.4), 56 ignored.
+\end{itemize}
+
+\paragraph{Build commands.}
+\begin{lstlisting}[language=bash]
+# 1. Set up Yocto build dir
+cd ~/yocto/poky
+source oe-init-build-env build-qemu-arm64
+
+# 2. Build image (~14 minutes on a 20-thread host)
+bitbake hpc-arm64-research
+
+# 3. Image artifact
+ls tmp/deploy/images/qemuarm64/hpc-arm64-research-qemuarm64.squashfs
+md5sum tmp/deploy/images/qemuarm64/hpc-arm64-research-qemuarm64.squashfs
+\end{lstlisting}
+
+\paragraph{Bench harness.}
+The bench harness is committed at \texttt{bin/hpc-benchmark.sh} of
+the \texttt{yocto-hardened} layer (HEAD \texttt{db833ec}). The
+script orchestrates VM destruction, image redeployment, FTRFS
+\texttt{mkfs}, mount on \texttt{/dev/vdb}, the four metric runs
+(M1, M2, M4, M5) on three compute nodes, and the four Slurm
+phases (S1--S4). The output JSON
+(\texttt{ftrfs-iobench-YYYY-MM-DD-HHMMSS.json}) is the dataset
+referenced by \cref{tab:iobench} and committed at
+\texttt{papers/2026-04-ftrfs-v1/data/iobench-2026-04-27-115222.json}.
+
+\paragraph{Verification commands.}
+\begin{lstlisting}[language=bash]
+# Verify image hash
+md5sum hpc-arm64-research-qemuarm64.squashfs
+# Expected: c56c203feb524f556329746fd693e805
+
+# Run full bench
+cd ~/git/yocto-hardened
+bin/hpc-benchmark.sh
+
+# Compute statistics from JSON
+python3 -c "
+import json
+d = json.load(open('/tmp/ftrfs-iobench-2026-04-27-115222.json'))
+for m, v in d['results'].items():
+    print(f'{m}: med={v[\"median\"]} {v[\"unit\"]}')
+"
+\end{lstlisting}

@@ -715,6 +715,36 @@ one to the other.
 
 ---
 
+## Publication roadmap
+
+The project's engineering milestones are mirrored on a public
+publication roadmap. Each major engineering tag triggers a new
+version of the project's Technical Report, deposited on HAL with
+the same `idHAL` (`aurelien-desbrieres`) for cumulative anteriority.
+
+| Version | Engineering trigger                          | Status              | HAL ID             |
+|---------|----------------------------------------------|---------------------|--------------------|
+| v1      | Stage 3 partial closure (this state)         | Awaiting moderation | `hal-05603801v1`   |
+| v2      | `v0.3.0-metadata-hardening`                  | Planned             | (TBA)              |
+| v3      | `v0.4.0-universal-protection`                | Planned             | (TBA)              |
+| v4      | `v0.5.0-security-reviewed`                   | Planned             | (TBA)              |
+
+The v1 source LaTeX, bibliography, dataset, and build instructions
+are committed under [`papers/2026-04-ftrfs-v1/`](../papers/2026-04-ftrfs-v1/).
+Each future version inherits the same directory layout
+(`papers/YYYY-MM-ftrfs-vN/`) for archival traceability. HAL native
+versioning preserves all prior versions and timestamps each new
+submission. Each version will additionally be mirrored to Zenodo
+via a GitHub release tag, yielding a perennial DOI independent of
+the HAL platform.
+
+The cross-reference table above must be updated at each milestone
+closure together with the engineering status table at the top of
+this document. The update process is described in the Document
+maintenance section below.
+
+---
+
 ## Document maintenance
 
 This roadmap is updated at each stage closure. The update

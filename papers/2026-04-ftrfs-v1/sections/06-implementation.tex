@@ -1,0 +1,68 @@
+\section{Implementation Status}\label{sec:implementation}
+
+\Cref{tab:items-status} lists the stage~3 work items closed at
+the time of this report (commit \texttt{9a63468}), with
+cross-references to the design principles each item exercises.
+All commits are GPG-signed and pushed to the public
+repository~\cite{ftrfs-repo}.
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{Stage 3 items closed and per-axis traceability (commit
+\texttt{9a63468}). The deferred item~4 design is frozen in the
+project roadmap and will be reported in v2.}
+\label{tab:items-status}
+\begin{tabularx}{\textwidth}{p{4.2cm}cccc l X}
+\toprule
+\textbf{Item} & \textbf{3.1} & \textbf{3.2} & \textbf{3.3} & \textbf{3.4} &
+\textbf{Status} & \textbf{Anchor commit(s)} \\
+\midrule
+1 -- Universal inode RS
+  & & & \checkmark & \checkmark
+  & \textsc{closed} & \texttt{ee6b6ae} \\
+2 -- Superblock RS
+  & \checkmark & \checkmark & \checkmark & \checkmark
+  & \textsc{closed} & \texttt{4227354} / \texttt{874dfdd} / \texttt{584440e} \\
+3 -- \texttt{ftrfs\_rs\_decode} contract
+  & \checkmark & \checkmark & & \checkmark
+  & \textsc{closed} & \texttt{54f500c} \\
+4a -- SB serialization refactor
+  & \checkmark & \checkmark & & \checkmark
+  & \textsc{closed} & \texttt{c75a067} \\
+4b-dirent -- dirent slot reuse
+  & & \checkmark & \checkmark &
+  & \textsc{closed} & \texttt{a7119c5} / \texttt{85df057} \\
+4 -- Shannon entropy / format v4
+  & & & &
+  & \textsc{deferred v2} & --- (frozen design) \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+Item~1 replaces the per-inode opt-in flag with the unconditional
+\texttt{INODE\_UNIVERSAL} scheme; the deprecated flag bit is
+preserved for v0.1.0/v0.2.0 image compatibility (per axis~3.3).
+Item~2 reuses the same \texttt{lib/reed\_solomon} machinery as the
+inode and bitmap paths and places parity at the trailing edge of
+the 4096-byte block to keep new feature additions local to the
+central padding region. Item~3 refines
+\texttt{ftrfs\_rs\_decode}'s return convention to yield the symbol
+count on success; this count is the seed of the future entropy
+computation in format~v4 (per axis~3.2). Item~4a refactors the
+superblock serialization paths to use \texttt{offsetof()} throughout
+with \texttt{BUILD\_BUG\_ON} sentinels; the 24-byte size sentinel
+of \texttt{struct ftrfs\_rs\_event} placed in this commit is the
+compile-time tripwire for the format~v4 transition. Item~4b-dirent
+fixes a regression where directory entry deletion zeroed
+\texttt{d\_rec\_len}, causing iteration loops to misclassify freed
+slots as end-of-block; the fix performs a full block scan and
+identifies free slots by \texttt{d\_ino == 0}, with a static
+invariant guard added to the pre-commit hook.
+
+The format v4 design (item~4 deferred) extends
+\texttt{struct ftrfs\_rs\_event} from 24 to 40 bytes with an
+entropy field, structural sentinels and per-record CRC; it
+migrates the superblock layout to 13~RS subblocks
+(\texttt{FTRFS\_SB\_RS\_PARITY\_BYTES} 128~$\to$~208) and provides
+strict version reject of v3 images on a v4 kernel.

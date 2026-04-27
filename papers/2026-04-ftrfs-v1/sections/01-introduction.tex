@@ -1,0 +1,51 @@
+\section{Introduction}\label{sec:intro}
+
+Modern Linux filesystems --- ext4, btrfs, bcachefs, and out-of-tree
+ZFS --- have converged on \emph{detection} of metadata corruption
+through cryptographic or polynomial checksums. \emph{Correction}
+of detected corruption, when offered at all, is delegated either to
+storage redundancy (RAID, mirrors) or to manual recovery tooling.
+For radiation-prone deployments --- aerospace, certain industrial
+control systems, high-altitude long-duration platforms --- this
+operational model is insufficient. Single-event upsets (SEU) and
+correlated burst errors require \emph{in-place} forward error
+correction at the filesystem layer, layered with strict
+fail-closed semantics that refuse to mount or proceed when the
+trust chain breaks.
+
+The FTRFS concept was introduced in 2015 by Fuchs, Langer and
+Trinitis~\cite{fuchs2015ftrfs}. The work presented here is a
+separate implementation, eleven years later, against a substantially
+different technical context: the Linux kernel now ships a mature,
+production-grade Reed--Solomon library
+(\texttt{lib/reed\_solomon}~\cite{kernelrslib}) used by MTD, DVB
+and EDAC subsystems; reproducible builds via Yocto LTS releases
+are the norm in regulated embedded deployment; MIL-STD-882E
+hazard tracking practice~\cite{milstd882e} has been formalized
+for software-intensive systems; and post-quantum integrity
+primitives (FIPS~205~\cite{fips205}) are entering the
+standardization pipeline. FTRFS as documented here is a 2026
+response to the 2015 problem statement, not a port.
+
+\paragraph{Contributions.} This report documents the following
+contributions, each verifiable against the public source tree at
+\url{https://github.com/roastercode/FTRFS}:
+\begin{itemize}
+\item Universal Reed--Solomon FEC on inode (item~1, commit
+  \texttt{ee6b6ae}) and superblock (item~2, commits
+  \texttt{4227354}/\texttt{874dfdd}/\texttt{584440e}) metadata.
+\item Strict layered defense: CRC32 detection followed by RS
+  correction on CRC failure, with re-verification after correction.
+\item Persistent radiation event journal: a 64-entry ring buffer
+  in the superblock, with each entry CRC32-protected.
+\item Fail-closed mount: strict version, scheme and incompatible
+  feature checks; unknown structural bits cause mount refusal.
+\item Single-source-of-truth on-disk layout: \texttt{offsetof()}
+  and \texttt{BUILD\_BUG\_ON} sentinels enforce kernel/user-space
+  symmetry at compile time (item~4a, commit \texttt{c75a067}).
+\end{itemize}
+
+\paragraph{Scope.} The format v4 bump (item~4) is designed and
+frozen but not yet implemented; v2 of this report will document it.
+Stage~4 (universal data-block protection) and stage~5 (offensive
+security review) are described as future work.

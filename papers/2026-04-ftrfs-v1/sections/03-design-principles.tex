@@ -1,0 +1,52 @@
+\section{Design Principles}\label{sec:principles}
+
+The work was conducted under a single guiding constraint: \emph{do
+not seek the simplest solution; seek the solution that is most
+coherent with the project, conforms to MIL-STD-882E hazard
+tracking practice, maximizes resilience, and preserves performance
+under deterministic bounds}. This constraint translates into four
+operational axes (\cref{tab:axes}), invoked explicitly in
+subsequent sections when justifying a design decision.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Design principles. Each axis is invoked at most once per
+technical sub-section; references to the axes appear as
+``per axis~3.X''.}
+\label{tab:axes}
+\begin{tabularx}{\textwidth}{p{2.6cm}X}
+\toprule
+\textbf{Axis} & \textbf{Operational meaning} \\
+\midrule
+3.1 Coherence
+  & Single source of truth for every on-disk invariant in C, via
+    \texttt{offsetof()} macros guarded by \texttt{BUILD\_BUG\_ON}
+    in the kernel and \texttt{static\_assert} in user-space.
+    Constants are mirrored byte-for-byte; drift is caught at
+    build time. \\
+\addlinespace[0.3em]
+3.2 MIL-STD-882E conformance
+  & Each correctable hazard is a distinct journal entry, captured
+    with block number, timestamp, symbol count and CRC.
+    Aggregate counters are rejected as
+    forensically insufficient~\cite{milstd882e}. \\
+\addlinespace[0.3em]
+3.3 Resilience over throughput
+  & Where tradeoffs arise, FTRFS chooses correction over
+    detection-only, fail-closed over best-effort, layered defense
+    over single checksum, universal coverage over opt-in. The
+    deprecated \texttt{INODE\_OPT\_IN} scheme is replaced by
+    unconditional \texttt{INODE\_UNIVERSAL}. \\
+\addlinespace[0.3em]
+3.4 Bounded performance
+  & Hot paths use kernel-accelerated CRC32 and shortened RS codes
+    from \texttt{lib/reed\_solomon}. The decoder runs only on
+    CRC failure ($>$99\% of reads bypass it). O(1) per block, no
+    FPU, no runtime division on metadata paths. The future
+    Q16.16 entropy LUT (format v4) is bounded analytically at
+    $\lceil N/2 \rceil$ Q-units, five orders of magnitude below
+    the Family A/B classification threshold. \\
+\bottomrule
+\end{tabularx}
+\end{table*}

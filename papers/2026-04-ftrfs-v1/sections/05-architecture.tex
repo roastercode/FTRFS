@@ -1,0 +1,75 @@
+\section{Architecture}\label{sec:architecture}
+
+\subsection{On-disk superblock (format v3)}
+
+The superblock occupies block~0 of the device, fits in one
+4096-byte block, and is the anchor of the metadata trust chain.
+\Cref{fig:sb-layout} renders its v3 layout. The header carries
+identification (magic, version, block size) and the global
+counters (block and inode counts, free counts, table pointers).
+The CRC32 covers two non-contiguous regions: \emph{region A}
+(bytes 0--63, fixed-position counters and version) and
+\emph{region B} (bytes 68--1688, UUID, label, RS journal, bitmap
+pointer, feature flags and data protection scheme). The
+\texttt{s\_crc32} field itself in bytes 64--67 is excluded from
+the CRC range, as is conventional.
+
+\begin{figure*}[t]
+\centering
+\input{figures/fig1-sb-layout-v3.tex}
+\caption{FTRFS superblock layout, format v3 (4096 bytes).
+Region A and region B are concatenated into a 1688-byte staging
+buffer (1685 logical bytes plus 3 bytes of zero pad to round up
+to 8 shortened RS subblocks of 211 data bytes each). The 128 bytes
+of RS parity reside at offset 3968 (the trailing 128 bytes of the
+block). The \texttt{s\_pad[2407]} region between the structured
+header and the parity zone is reserved for future feature
+extensions, in line with axis 3.1 (single source of truth: future
+fields encode their offset via \texttt{offsetof()} guarded by
+\texttt{BUILD\_BUG\_ON}).}
+\label{fig:sb-layout}
+\end{figure*}
+
+\subsection{Universal inode protection (item 1)}
+
+Every inode occupies 256~bytes on-disk. The first 240 bytes carry
+the canonical fields (mode, uids, sizes, timestamps, flags, CRC32,
+direct/indirect block pointers); the trailing 16~bytes
+(\texttt{i\_reserved[0..15]}) hold the RS(255,239) parity over the
+preceding 172 bytes of structured fields plus padding. The data
+protection scheme \texttt{INODE\_UNIVERSAL} (value 5, item~1)
+mandates this layout for every inode unconditionally; the legacy
+opt-in flag \texttt{FTRFS\_INODE\_FL\_RS\_ENABLED} is preserved as
+a bit definition for backward compatibility with v0.1.0/v0.2.0
+images, but new images do not set it (per axis~3.3).
+
+\subsection{On-disk allocation bitmap}
+
+The block allocation bitmap occupies a single 4096-byte block,
+formatted as 16 RS(255,239)-shortened subblocks of 239~data bytes
+plus 16~parity bytes each. The total addressable bitmap covers
+$16 \times 239 \times 8 = 30{,}592$ blocks, well within the bounds
+of typical embedded deployments.
+
+\subsection{Radiation event journal}
+
+The superblock embeds a 64-entry ring buffer of
+\texttt{struct ftrfs\_rs\_event} records, occupying 1536~bytes
+($64 \times 24$). Each record captures the corrected block number,
+a nanosecond timestamp, a symbol count, and a CRC32 over the
+preceding 20~bytes. The next-write index is held in
+\texttt{s\_rs\_journal\_head}. On every successful RS correction
+event, the kernel writes one record (per axis~3.2). Format~v4 will
+extend each record to 40~bytes by adding a Shannon entropy field
+and structural sentinels (see \cref{sec:future}).
+
+\subsection{Reed--Solomon code parameters}
+
+FTRFS uses RS(255,239) shortened with data length tailored to the
+protected region: 211 data bytes for the superblock subblocks,
+239 data bytes for inode and bitmap subblocks. Each subblock
+carries 16 parity bytes, tolerating up to 8 symbol errors
+($\lfloor 16/2 \rfloor$) independently. Encoding and decoding are
+delegated to \texttt{lib/reed\_solomon} from the Linux kernel
+tree~\cite{kernelrslib}, avoiding the maintenance burden and
+correctness risk of an in-tree reimplementation.

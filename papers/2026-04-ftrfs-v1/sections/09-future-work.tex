@@ -1,0 +1,40 @@
+\section{Future Work}\label{sec:future}
+
+The remaining engineering work is partitioned into three named
+milestones; each corresponds to an annotated GPG-signed git tag
+and to a subsequent version of this report.
+
+\begin{description}
+\item[v0.3.0-metadata-hardening (target: v2 of this report).]
+Implementation of item~4: format~v4 bump, struct
+\texttt{ftrfs\_rs\_event} extended to 40~bytes, Shannon entropy
+field with Q16.16 fixed-point lookup table, superblock layout
+migration to 13~RS subblocks. The migration is breaking: a v4
+kernel refuses to mount a v3 image (per axis~3.3). v2 will report
+the recovery delta against the v1 baseline of \cref{tab:iobench}.
+
+\item[v0.4.0-universal-protection (target: v3).]
+Stage~4: universal data-block protection. The choice between
+\texttt{UNIVERSAL\_INLINE} (parity bytes embedded per block),
+\texttt{UNIVERSAL\_SHADOW} (out-of-band parity region), and
+\texttt{UNIVERSAL\_EXTENT} (extent-attribute parity) will be made
+on the basis of measured throughput, recovery latency, and
+integration cost. v3 will additionally include the deferred
+user-space CVE remediation.
+
+\item[v0.5.0-security-reviewed (target: v4).]
+Stage~5: targeted syzkaller fuzzing campaign with a custom
+\texttt{syzlang} grammar for the FTRFS mount and ioctl surfaces;
+KASAN-instrumented stress runs; structured adversarial review
+against the threat model of \cref{sec:threat}.
+\end{description}
+
+Each version of this report is deposited on HAL with the same
+\texttt{idHAL} (\texttt{aurelien-desbrieres}); HAL native
+versioning preserves all prior versions and timestamps each new
+submission, providing cumulative anteriority. Each version is
+mirrored to Zenodo via a GitHub release, yielding a perennial DOI.
+The source LaTeX, bibliography, dataset, and build instructions
+for the present report are committed under
+\texttt{papers/2026-04-ftrfs-v1/} in the FTRFS source
+tree~\cite{ftrfs-repo}.

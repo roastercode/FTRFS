@@ -1,0 +1,81 @@
+@inproceedings{fuchs2015ftrfs,
+  author       = {Fuchs, Christian and Langer, Daniel and Trinitis, Carsten},
+  title        = {{FTRFS}: A Fault-Tolerant Radiation-Robust Filesystem
+                  for Space Applications},
+  booktitle    = {ARCS 2015 -- 28th International Conference on
+                  Architecture of Computing Systems},
+  year         = {2015},
+  publisher    = {Springer},
+  address      = {Porto, Portugal},
+  note         = {Original FTRFS concept paper. The present implementation
+                  is independent and developed eleven years later under
+                  contemporary standards (MIL-STD-882E, NIST SP 800-193).}
+}
+
+@misc{milstd882e,
+  author       = {{U.S. Department of Defense}},
+  title        = {{MIL-STD-882E}: System Safety Standard Practice},
+  howpublished = {Department of Defense Standard Practice},
+  year         = {2012},
+  month        = {May},
+  note         = {Issued 2012-05-11.}
+}
+
+@techreport{nistsp800193,
+  author       = {Regenscheid, Andrew},
+  title        = {{NIST Special Publication 800-193}: Platform Firmware
+                  Resiliency Guidelines},
+  institution  = {National Institute of Standards and Technology},
+  year         = {2018},
+  month        = {May},
+  url          = {https://doi.org/10.6028/NIST.SP.800-193}
+}
+
+@misc{fips205,
+  author       = {{National Institute of Standards and Technology}},
+  title        = {{FIPS 205}: Stateless Hash-Based Digital Signature
+                  Standard},
+  year         = {2024},
+  url          = {https://doi.org/10.6028/NIST.FIPS.205}
+}
+
+@misc{kernelrslib,
+  author       = {{Linux kernel contributors}},
+  title        = {{lib/reed\_solomon}: Reed-Solomon error correction
+                  library},
+  howpublished = {\url{https://www.kernel.org/}},
+  year         = {2026},
+  note         = {Source: \texttt{lib/reed\_solomon/} of the Linux
+                  kernel tree. Used by MTD/NAND, DVB and EDAC
+                  subsystems.}
+}
+
+@misc{ftrfs-repo,
+  author       = {Desbri\`eres, Aur\'elien},
+  title        = {{FTRFS}: source repository},
+  howpublished = {\url{https://github.com/roastercode/FTRFS}},
+  year         = {2026},
+  note         = {HEAD commit \texttt{9a63468} at the time of this report.}
+}
+
+@misc{yocto-hardened-repo,
+  author       = {Desbri\`eres, Aur\'elien},
+  title        = {yocto-hardened: Yocto layer for FTRFS arm64
+                  research deployment},
+  howpublished = {\url{https://github.com/roastercode/yocto-hardened}},
+  year         = {2026},
+  note         = {HEAD commit \texttt{9a5593b} (branch
+                  \texttt{arm64-ftrfs}) at the time of this report.}
+}
+
+@misc{ftrfs-rfc-thread,
+  author       = {Desbri\`eres, Aur\'elien},
+  title        = {{FTRFS} {RFC} v3 thread on linux-fsdevel},
+  howpublished = {\url{https://lore.kernel.org/linux-fsdevel/20260414120726.5713-1-aurelien@hackers.camp/T/}},
+  year         = {2026},
+  month        = {April},
+  note         = {Public archive of the design review thread on the
+                  Linux filesystem development mailing list.
+                  Successive RFC iterations (v1, v2, v3) of the FTRFS
+                  proposal have engaged senior filesystem reviewers.}
+}

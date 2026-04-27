@@ -1,0 +1,58 @@
+\section{Threat Model}\label{sec:threat}
+
+The full threat model is normative in
+\texttt{Documentation/threat-model.md} of the source tree (commit
+\texttt{9a63468}); this section summarizes the elements relevant to
+v1 of the report.
+
+\paragraph{Failure families.}
+We distinguish two failure families to which the metadata trust
+chain must respond:
+\begin{description}
+\item[Family A -- Poisson SEU.] Independent single-event upsets
+  affecting isolated bits or bytes, distributed in space and time
+  according to a homogeneous Poisson process. Typical of low-LET
+  galactic cosmic ray background. Correctable by RS(255,239)
+  shortened codes up to eight symbol errors per subblock.
+\item[Family B -- correlated burst.] Spatially or temporally
+  correlated corruption affecting contiguous bytes or repeated
+  positions, typical of higher-LET particle tracks, single-event
+  multiple-bit upsets, or early-stage device wear. May or may not
+  be correctable depending on burst length and locality. The
+  presence of Family B is detectable post-correction from the
+  spatial distribution of corrected positions; format v4 will
+  expose this via the Shannon entropy field
+  (\cref{sec:future}).
+\end{description}
+
+\paragraph{Trust chain.}
+At mount time and on every read of a metadata block, FTRFS verifies:
+\begin{enumerate}
+\item Magic number and version: strict equality with
+  \texttt{FTRFS\_MAGIC} and \texttt{FTRFS\_VERSION\_CURRENT}.
+\item CRC32 over the canonical serialization. If valid, accept.
+\item If CRC fails, attempt RS decoding over the same logical
+  region. If RS recovers a valid codeword, re-verify CRC; only on
+  re-verification success is the block accepted, and a journal
+  entry is written.
+\item Range check on \texttt{s\_data\_protection\_scheme}: refuse
+  values above \texttt{FTRFS\_DATA\_PROTECTION\_MAX}; the three
+  high-order bytes of the field act as structural sentinels against
+  single-byte high-side corruption.
+\item Feature flag dispatch: unknown bits in
+  \texttt{s\_feat\_incompat} cause mount refusal; unknown bits in
+  \texttt{s\_feat\_ro\_compat} force read-only mount with a logged
+  warning; unknown bits in \texttt{s\_feat\_compat} are logged
+  informationally.
+\end{enumerate}
+
+The fail-closed posture (per axis~3.3) ensures that no metadata is
+trusted unless every layer of the chain accepts it.
+
+\paragraph{Out of scope.}
+Active adversaries, side-channel attacks on the host CPU, and
+pre-mount image tampering by an attacker with root access are out
+of scope for v1. Stage~5 of the project plan addresses the
+adversarial threat model; \cref{sec:future} describes the
+planned syzkaller campaign and the security review activities
+slated for v0.5.0.

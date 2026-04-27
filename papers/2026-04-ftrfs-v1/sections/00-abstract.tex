@@ -1,0 +1,26 @@
+We present FTRFS, a Linux filesystem for radiation-robust
+embedded environments. Building on the original concept of Fuchs,
+Langer and Trinitis (ARCS 2015), the present implementation is a
+contemporary response to the 2015 problem statement under the
+standards and tooling that have emerged in the intervening eleven
+years: the Linux kernel's mature \texttt{lib/reed\_solomon}
+infrastructure, MIL-STD-882E hazard tracking practice for
+software-intensive systems, and reproducible embedded builds via
+the Yocto Project.
+
+FTRFS combines universal Reed--Solomon forward error correction on
+metadata (inodes, allocation bitmap, superblock), a persistent
+on-disk radiation event journal, and fail-closed mount semantics.
+To our knowledge, no other Linux filesystem combines these three
+properties.
+
+This Technical Report v1 documents the project state at commit
+\texttt{9a63468}: stage 3 partial closure, format v3 stable, format
+v4 design frozen but not yet implemented, validation on a hardened
+arm64 build (Yocto Scarthgap, linux-mainline 7.0.1, zero unpatched
+kernel CVE), and an I/O baseline captured on a four-node libvirt
+cluster. The project's main upstream review thread is publicly
+archived on lore.kernel.org~\cite{ftrfs-rfc-thread}.
+
+This is part of a versioned publication roadmap (v2--v4) following
+the project's engineering milestones.

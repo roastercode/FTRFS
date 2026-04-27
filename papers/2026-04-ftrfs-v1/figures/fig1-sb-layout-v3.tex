@@ -1,0 +1,70 @@
+% Fig.1 -- FTRFS superblock layout v3 (4096 bytes)
+% Standalone TikZ for inclusion via \input{}
+\begin{tikzpicture}[
+  every node/.style={font=\small},
+  block/.style={draw, minimum height=0.8cm, anchor=west},
+  scale=1
+]
+% --- Total block: 4096 bytes, drawn as a 14cm horizontal bar
+% Scale: 1 byte = 14cm / 4096 -- but we'll group by region
+
+% Region positions (relative widths chosen for legibility, not strict scale)
+\def\xstart{0}
+\def\hbar{1.0}
+
+% Region A: bytes 0-63 (header + counters), 64 bytes
+\node[block, fill=blue!20, minimum width=1.2cm] (rA) at (\xstart,0) {};
+\node[font=\scriptsize] at (rA.center) {hdr};
+
+% s_crc32: bytes 64-67, 4 bytes (excluded from CRC)
+\node[block, fill=red!30, minimum width=0.4cm] (crc) at (rA.east) {};
+\node[font=\scriptsize, rotate=90] at (crc.center) {crc};
+
+% UUID + label: bytes 68-115, 48 bytes
+\node[block, fill=green!20, minimum width=0.7cm] (uuid) at (crc.east) {};
+\node[font=\scriptsize] at (uuid.center) {uuid};
+
+% RS journal: bytes 116-1651, 1536 bytes (64 entries x 24 bytes)
+\node[block, fill=orange!30, minimum width=4.2cm] (journal) at (uuid.east) {};
+\node[font=\scriptsize] at (journal.center) {RS event journal (64$\times$24 B)};
+
+% Misc fields: bytes 1652-1688, 36 bytes (head, bitmap_blk, features, scheme)
+\node[block, fill=yellow!30, minimum width=0.7cm] (misc) at (journal.east) {};
+\node[font=\scriptsize, rotate=90] at (misc.center) {feat};
+
+% s_pad: bytes 1689-3967 (offset 1689 to before parity), 2279 bytes
+\node[block, fill=gray!15, minimum width=5.4cm] (pad) at (misc.east) {};
+\node[font=\scriptsize] at (pad.center) {\texttt{s\_pad[2407]} (reserved)};
+
+% RS parity: bytes 3968-4095, 128 bytes (8 subblocks x 16 parity bytes)
+\node[block, fill=purple!30, minimum width=1.4cm] (parity) at (pad.east) {};
+\node[font=\scriptsize] at (parity.center) {RS parity};
+
+% Total bracket on top
+\draw[decorate, decoration={brace, amplitude=4pt}]
+  ([yshift=2pt]rA.north west) -- ([yshift=2pt]parity.north east)
+  node[midway, above, yshift=4pt]
+  {Superblock = 4096 bytes (block 0)};
+
+% Byte offset annotations below
+\node[font=\scriptsize, below=1pt of rA, anchor=north west] {0};
+\node[font=\scriptsize, below=1pt of crc, anchor=north west] {64};
+\node[font=\scriptsize, below=1pt of uuid, anchor=north west] {68};
+\node[font=\scriptsize, below=1pt of journal, anchor=north west] {116};
+\node[font=\scriptsize, below=1pt of misc, anchor=north west] {1652};
+\node[font=\scriptsize, below=1pt of pad, anchor=north west] {1689};
+\node[font=\scriptsize, below=1pt of parity, anchor=north west] {3968};
+\node[font=\scriptsize, below=1pt of parity, anchor=north east] {4096};
+
+% CRC32 coverage bracket below the byte offsets
+\draw[decorate, decoration={brace, mirror, amplitude=4pt}, blue!50!black]
+  ([yshift=-18pt]rA.south west) -- ([yshift=-18pt]misc.south east)
+  node[midway, below, yshift=-4pt, blue!50!black, font=\footnotesize]
+  {CRC32 coverage: regions A (0--63) + B (68--1688), 1685 logical bytes};
+
+% RS staging bracket
+\draw[decorate, decoration={brace, mirror, amplitude=4pt}, purple!50!black]
+  ([yshift=-44pt]rA.south west) -- ([yshift=-44pt]parity.south east)
+  node[midway, below, yshift=-4pt, purple!50!black, font=\footnotesize]
+  {RS(255,239) shortened: 8 subblocks of 211 data bytes, 16 parity bytes each (128 B parity at offset 3968)};
+\end{tikzpicture}
