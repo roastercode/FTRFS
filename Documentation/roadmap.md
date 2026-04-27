@@ -722,12 +722,25 @@ publication roadmap. Each major engineering tag triggers a new
 version of the project's Technical Report, deposited on HAL with
 the same `idHAL` (`aurelien-desbrieres`) for cumulative anteriority.
 
-| Version | Engineering trigger                  | Status              | Zenodo DOI                     | HAL ID            |
-|---------|--------------------------------------|---------------------|--------------------------------|-------------------|
-| v1      | Stage 3 partial closure (this state) | Published (Zenodo)  | [10.5281/zenodo.19824442](https://doi.org/10.5281/zenodo.19824442) | `hal-05603801` (awaiting moderation) |
-| v2      | `v0.3.0-metadata-hardening`          | Planned             | (TBA)                          | (TBA)             |
-| v3      | `v0.4.0-universal-protection`        | Planned             | (TBA)                          | (TBA)             |
-| v4      | `v0.5.0-security-reviewed`           | Planned             | (TBA)                          | (TBA)             |
+| Version | Engineering trigger                  | Status              | Zenodo DOI                                                          |
+|---------|--------------------------------------|---------------------|---------------------------------------------------------------------|
+| v1      | Stage 3 partial closure (this state) | Published           | [10.5281/zenodo.19824442](https://doi.org/10.5281/zenodo.19824442)  |
+| v2      | `v0.3.0-metadata-hardening`          | Planned             | (TBA)                                                               |
+| v3      | `v0.4.0-universal-protection`        | Planned             | (TBA)                                                               |
+| v4      | `v0.5.0-security-reviewed`           | Planned             | (TBA)                                                               |
+
+**Note on HAL.** A HAL deposit was attempted for v1 (`hal-05603801`)
+but was declined on 2026-04-27. HAL's editorial policy restricts
+deposits to authors affiliated with academic institutions, registered
+PhD candidates, or holders of an official doctoral degree, with a
+narrow exception for authors with an extensive publication record in
+internationally peer-reviewed journals. The author's profile (15+
+years of professional experience in critical-infrastructure Linux
+engineering, Linux kernel mailing-list engagement, technical media
+coverage) does not match these criteria. HAL itself recommended
+Zenodo as the appropriate alternative. Zenodo (CERN, EU-funded) is
+therefore the canonical citable identifier for this Technical Report
+series.
 
 The v1 source LaTeX, bibliography, dataset, and build instructions
 are committed under [`papers/2026-04-ftrfs-v1/`](../papers/2026-04-ftrfs-v1/).
