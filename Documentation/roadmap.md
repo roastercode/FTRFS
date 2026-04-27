@@ -199,10 +199,20 @@ write/umount/remount cycle preserves counters, single-bit flip
 on inode 2 triggers RS recovery + log event + corrected
 writeback, subsequent remount succeeds, dmesg clean.
 
-### Item 2 — Superblock RS correction (ACTIVE)
+### Item 2 — Superblock RS correction (CLOSED 2026-04-26)
 
 **Threat model reference:** 6.3 (correction not just detection)
 for the superblock case.
+
+**Commits:**
+- FTRFS `4227354` (commit A -- RS region helpers in edac.c)
+- FTRFS `874dfdd` (commit B -- mkfs SB RS layout)
+- FTRFS `584440e` (commit C -- kernel SB RS decode + dirty_super)
+- yocto-hardened layer sync commits, lockstep
+
+Implementation followed the 3-commit plan A/B/C unchanged from
+the design below. v3 format preserved (parity placed in `s_pad`
+at offset 3968, 8 RS subblocks of 16 bytes parity each).
 
 The superblock today (v0.2.0+, including stage 3 item 1) has
 CRC32 detection only; corruption causes mount failure. This item
@@ -262,9 +272,20 @@ correctable in place at mount.
   `v0.3.0-metadata-hardening` expected **after** items 3
   and 4 are also closed.
 
-### Item 3 — Fix `ftrfs_rs_decode` return convention (PENDING)
+### Item 3 — Fix `ftrfs_rs_decode` return convention (CLOSED 2026-04-26)
 
 **Reference:** known-limitations 3.5.
+
+**Commits:**
+- FTRFS `54f500c ftrfs: stage 3 item 3 -- fix ftrfs_rs_decode return convention (KL 3.5)`
+- yocto-hardened `451e0ad ftrfs: sync layer sources from FTRFS HEAD 54f500c`
+
+Resolution applied per option (1) of KL 3.5: `ftrfs_rs_decode` now
+returns the symbol count on successful correction, keeps `-EBADMSG`
+for uncorrectable. All callers (bitmap subblock loop in `alloc.c`,
+inode RS path in `inode.c`) updated to test `rc > 0` for correction
+events. The new contract is the prerequisite for item 4 (Shannon
+entropy consumes the symbol count and the position list).
 
 Today `ftrfs_rs_decode` returns 0 (success, regardless of
 whether corrections occurred) or `-EBADMSG` (uncorrectable).
@@ -281,29 +302,136 @@ path in `inode.c`, superblock RS path from item 2). The new
 return contract is the prerequisite for item 4 (entropy uses
 the count).
 
+### Item 4a — Refactor SB serialization (CLOSED 2026-04-26)
+
+**Commits:**
+- FTRFS `c75a067 ftrfs: refactor SB serialization to offsetof + BUILD_BUG_ON + static_assert`
+- yocto-hardened `42a520f ftrfs: sync layer sources from FTRFS HEAD c75a067 + add invariants/validate scripts`
+
+Refactored `ftrfs_sb_serialize` and `ftrfs_sb_deserialize` to use
+`offsetof()` macros throughout, with `BUILD_BUG_ON` sentinels at
+module init and `static_assert` at compile time guarding every
+on-disk field offset and structure size. The sentinels are the
+compile-time tripwire that will force every call-site through
+verification when item 4 bumps `struct ftrfs_rs_event` from 24
+to 40 bytes. Added `bin/ftrfs-invariants.sh` (4 static invariants)
+and `bin/ftrfs-validate.sh` (chains invariants + HPC bench).
+
+### Item 4b-dirent — Dirent slot reuse fix + research deployment (CLOSED 2026-04-26)
+
+**Commits:**
+- FTRFS `a7119c5 ftrfs: fix directory entry slot reuse after deletion`
+- FTRFS `aaa18d5 doc/roadmap: track userspace tooling integration as upstream prerequisite`
+- FTRFS `85df057 doc/README: add 2026-04-26 HPC validation on research deployment`
+- yocto-hardened `0e3f9f3 ftrfs: sync dirent slot reuse fix from upstream + inv5 regression guard`
+- yocto-hardened `8e3cac1 research image: hpc-arm64-research.bb + bench refactor for real /dev/vdb FTRFS`
+- yocto-hardened `f217af8 doc: 2026-04-26 baseline + README milestones for research deployment`
+
+Dirent slot reuse bug: `ftrfs_del_dirent` zeroed the full 268-byte
+`struct ftrfs_dir_entry` including `d_rec_len`, causing readdir
+and lookup loops that advanced via `offset += le16_to_cpu(de->d_rec_len)`
+and broke on `!d_rec_len` to treat a freed slot as end-of-block,
+masking live entries after the hole in the same 4 KiB block.
+Fix (option alpha): full-block scan, advance unconditionally by
+`sizeof(struct ftrfs_dir_entry)`, free slot identified by
+`d_ino == 0`. Static invariant `inv5_dirent_no_break_on_zero`
+added as pre-commit guard against regression.
+
+Research deployment: new Yocto recipe `hpc-arm64-research.bb`
+replaces `hpc-arm64-master.bb` + `hpc-arm64-compute.bb` with a
+single squashfs read-only rootfs image (~52 MB), real `/dev/vdb`
+FTRFS partition (no more loopback), kernel cmdline-driven hostname,
+`ftrfs.ko` packaged in image (no manual injection). `hpc-benchmark.sh`
+phases 2-7 refactored. Architecture is now OIV-grade. Pre-v4 I/O
+baseline captured on this architecture and recorded in
+`Documentation/iobench-baseline-2026-04-26.md` (yocto-hardened layer):
+M1 write seq + fsync (4MB) Med 5.000 MB/s, M2 read seq cold (4MB)
+Med 20.000 MB/s, M4 stat bulk (100 files) Med 0.150 s, M5 small
+write + fsync (10x64B) Med 24.000 ms. This baseline is the
+reference against which item 4 (v4 bump) will be compared
+(regression criterion: delta < 10 % on M1+M2).
+
 ### Item 4 — Shannon entropy in RS journal (PENDING)
 
 **Threat model reference:** 6.4 (tamper-evident journal).
 Reclassified as Must-have by threat-model section 8 §1.
 
 Each `ftrfs_rs_event` records a per-correction entropy estimate.
-Three placement candidates evaluated when the work begins:
-- High bits of `re_error_bits` (32-bit field, only low 4 bits
-  carry the symbol count which is bounded by 8). No layout
-  change.
-- Padding bytes adjacent to `s_rs_journal_head` in the superblock.
-- A reuse of an unused field in the existing 24-byte event entry.
+Entropy is the forensic discriminator between Family A (Poisson
+background) and Family B (correlated burst), computed on the
+symbol position list returned by item 3's extended return contract.
 
-Entropy is the forensic discriminator between Family A
-(Poisson background) and Family B (correlated burst). Computed
-on the symbol pattern returned by item 3's new return contract.
+#### Decision: format bump v3 -> v4
+
+The placement evaluation reached the conclusion that no in-place
+reuse of existing 24-byte fields is acceptable: entropy needs a
+dedicated `__le32` field plus a flags byte plus a CRC, and the
+event entry needs to grow to 40 bytes. v4 is therefore a strict
+format bump (kernel item-4 refuses to mount image v3).
+
+#### Target struct (40 bytes, packed)
+
+```
+struct ftrfs_rs_event {
+    __le64  re_block_no;          /*  0..7   */
+    __le64  re_timestamp;         /*  8..15  */
+    __le32  re_symbol_count;      /* 16..19  renamed from re_error_bits */
+    __le32  re_entropy_q16_16;    /* 20..23  Shannon H, Q16.16, range [0,3] */
+    __le32  re_flags;             /* 24..27  bit 0 = entropy_valid */
+    __le32  re_reserved;          /* 28..31  zero, structural sentinel */
+    __le32  re_crc32;             /* 32..35  CRC32 over bytes 0..31 */
+    __le32  re_pad;               /* 36..39  zero, alignment + sentinel */
+} __packed;
+```
+
+#### Target SB layout v4 (13 subblocks)
+
+The growth of `struct ftrfs_rs_event` propagates to the journal
+capacity sizing in the superblock, requiring SB layout adjustment:
+
+- `FTRFS_SB_RS_COVERAGE_BYTES`  : 1685 -> 2709
+- `FTRFS_SB_RS_STAGING_BYTES`   : 1688 -> 2743 (13 * 211)
+- `FTRFS_SB_RS_DATA_LEN`        : 211 (unchanged)
+- `FTRFS_SB_RS_SUBBLOCKS`       : 8 -> 13
+- `FTRFS_SB_RS_PARITY_BYTES`    : 128 -> 208
+- `FTRFS_SB_RS_PARITY_OFFSET`   : 3968 -> 3888
+- `s_pad[]`                     : 2407 -> 1383
+
+Arithmetic check: 2713 + 1175 + 208 = 4096.
+
+#### Shannon entropy algorithm (binned, B=8, deterministic)
+
+H = sum over 8 bins of LUT[N][bin_count[i]], where N is the
+number of corrected positions, k_i is the count of positions in
+bin i, and `LUT[N][k] = -k/N * log2(k/N)` precomputed in Q16.16.
+The LUT is generated by an external Python script and hardcoded
+in `edac.c`. No FPU, no runtime division, deterministic in cycles.
+Range: H in [0, 3] bits (log2(8) = 3).
+
+#### Implementation plan (6 sub-commits A-F)
+
+- **Commit A** -- `ftrfs.h`: struct `ftrfs_rs_event` v4 (24 -> 40
+  bytes), defines for SB layout v4, `BUILD_BUG_ON` sentinels.
+- **Commit B** -- `edac.c`: LUT Q16.16, `ftrfs_rs_compute_entropy`
+  helper, new signature for `ftrfs_rs_decode` /
+  `ftrfs_rs_decode_region` exposing position list.
+- **Commit C** -- `super.c`: v4 mount path (strict reject != V4),
+  `ftrfs_log_rs_event` new signature with entropy, new call-site
+  for SB recovery (the deferred slot from item 2 commit C).
+- **Commit D** -- `inode.c`, `alloc.c`: propagate position buffer,
+  compute entropy at call-sites.
+- **Commit E** -- `mkfs.ftrfs.c`: v4 sync (defines + struct
+  mirrors + emit `s_version = 4`).
+- **Commit F** -- documentation: `testing.md`, new
+  `format-v4.md`, roadmap update, README HPC validation v4.
+
+Tag `v0.3.0-metadata-hardening` follows after lockstep push of
+all sub-commits and successful HPC validation against the pre-v4
+baseline.
 
 ### Sanity tests for stage 3 closure
 
 In addition to the standard validation chain
-
-### Sanity tests for stage 3 closure
-
 In addition to the standard validation chain
 (`context-ftrfs-validation.md` section 3):
 
@@ -323,13 +451,12 @@ In addition to the standard validation chain
 
 ### Format implication
 
-Stage 3 may or may not require a v4 format bump depending on the
-chosen superblock RS layout. If the existing `s_pad` region is
-sufficient, the format remains v3 and `s_data_protection_scheme`
-stays at `INODE_OPT_IN` (semantic of "all inodes RS-protected,
-no data-block FEC yet" rather than the legacy "per-inode
-opt-in"). If a backup superblock is introduced, format bumps to
-v4 and a new enum value or feature bit captures the change.
+Items 1, 2, 3 closed without format bump (v3 preserved). Item 4
+requires a strict v4 bump as the entropy field cannot be hidden
+in the existing 24-byte `ftrfs_rs_event` footprint without
+sacrificing the structural sentinels and CRC. Stage 3 closes on
+format v4. `s_data_protection_scheme` remains at
+`INODE_UNIVERSAL` (= 5) introduced by item 1.
 
 ### Tag
 
