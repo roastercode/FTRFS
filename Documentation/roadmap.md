@@ -722,12 +722,12 @@ publication roadmap. Each major engineering tag triggers a new
 version of the project's Technical Report, deposited on HAL with
 the same `idHAL` (`aurelien-desbrieres`) for cumulative anteriority.
 
-| Version | Engineering trigger                          | Status              | HAL ID             |
-|---------|----------------------------------------------|---------------------|--------------------|
-| v1      | Stage 3 partial closure (this state)         | Awaiting moderation | `hal-05603801v1`   |
-| v2      | `v0.3.0-metadata-hardening`                  | Planned             | (TBA)              |
-| v3      | `v0.4.0-universal-protection`                | Planned             | (TBA)              |
-| v4      | `v0.5.0-security-reviewed`                   | Planned             | (TBA)              |
+| Version | Engineering trigger                  | Status              | Zenodo DOI                     | HAL ID            |
+|---------|--------------------------------------|---------------------|--------------------------------|-------------------|
+| v1      | Stage 3 partial closure (this state) | Published (Zenodo)  | [10.5281/zenodo.19824442](https://doi.org/10.5281/zenodo.19824442) | `hal-05603801` (awaiting moderation) |
+| v2      | `v0.3.0-metadata-hardening`          | Planned             | (TBA)                          | (TBA)             |
+| v3      | `v0.4.0-universal-protection`        | Planned             | (TBA)                          | (TBA)             |
+| v4      | `v0.5.0-security-reviewed`           | Planned             | (TBA)                          | (TBA)             |
 
 The v1 source LaTeX, bibliography, dataset, and build instructions
 are committed under [`papers/2026-04-ftrfs-v1/`](../papers/2026-04-ftrfs-v1/).

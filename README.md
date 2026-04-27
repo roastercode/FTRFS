@@ -347,7 +347,11 @@ Commit attribution: `Assisted-by: Claude:claude-sonnet-4-6`
 
 ### Technical Report v1 (April 2026)
 
-- **HAL**: [hal-05603801v1](https://hal.science/hal-05603801) — *FTRFS: Bringing Radiation-Robust Filesystem Principles to Contemporary Linux. A Reed--Solomon, MIL-STD-882E-Aligned Implementation (Technical Report -- Version 1)*
+*FTRFS: Bringing Radiation-Robust Filesystem Principles to Contemporary Linux.
+A Reed--Solomon, MIL-STD-882E-Aligned Implementation (Technical Report -- Version 1)*
+
+- **DOI (Zenodo)**: [10.5281/zenodo.19824442](https://doi.org/10.5281/zenodo.19824442)
+- **HAL**: `hal-05603801` (deposit submitted 2026-04-27, awaiting moderation)
 - **License**: CC-BY 4.0
 - **Source**: [`papers/2026-04-ftrfs-v1/`](./papers/2026-04-ftrfs-v1/) (LaTeX source, bibliography, dataset, build instructions)
 - **Anchor commit**: `9a63468`
